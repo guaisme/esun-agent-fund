@@ -56,6 +56,22 @@ def test_api_key_never_logged(monkeypatch, caplog):
     assert "[REDACTED]" in caplog.text
 
 
+def test_uvicorn_access_log_keeps_arguments(monkeypatch):
+    from uvicorn.logging import AccessFormatter
+    key = "test-secret-uvicorn"
+    monkeypatch.setenv("GOOGLE_API_KEY", key)
+    record = logging.getLogRecordFactory()(
+        "uvicorn.access", logging.INFO, __file__, 1,
+        '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1:8000", "GET", "/?key=" + key, "1.1", 200), None,
+    )
+    assert len(record.args) == 5
+    assert record.args[-1] == 200
+    rendered = AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False).format(record)
+    assert "200 OK" in rendered
+    assert key not in rendered
+
+
 def test_discovery_unavailable(monkeypatch):
     monkeypatch.setattr(McpToolset, "get_tools", AsyncMock(side_effect=ConnectionError("offline")))
     assert asyncio.run(agent.root_agent.tools[0].get_tools()) == []
@@ -73,6 +89,25 @@ def test_tool_and_api_errors():
     assert "失敗" in result["error"]
     response = agent.model_error(context(), None, RuntimeError())
     assert "Gemini API 呼叫失敗" in response.content.parts[0].text
+
+
+def test_model_error_is_not_overwritten():
+    ctx = context()
+    response = agent.model_error(ctx, None, SimpleNamespace(code=404))
+    assert "HTTP 404" in response.content.parts[0].text
+    assert "GEMINI_MODEL" in response.content.parts[0].text
+    assert agent.require_evidence(ctx, response) is None
+    agent.begin_research(ctx)
+    assert not ctx.state["temp:research_model_error"]
+
+
+def test_evidence_guard_ignores_nonfinal_fragments():
+    ctx = context()
+    fragment = LlmResponse(partial=True, content=types.Content(parts=[types.Part(text="working")]))
+    assert agent.require_evidence(ctx, fragment) is None
+    thought = LlmResponse(content=types.Content(parts=[types.Part(text="plan", thought=True)]))
+    assert agent.require_evidence(ctx, thought) is None
+    assert agent.require_evidence(ctx, LlmResponse()) is None
 
 
 def test_missing_api_key(monkeypatch):

@@ -23,6 +23,11 @@ notepad research_agent/.env
 不要貼到程式、日誌、測試報告或 GitHub。`.env` 已被 Git 忽略；`.env.example` 只有佔位符。
 既有 shell 環境變數優先於 `.env`；變更後重新啟動 Web。
 
+若 Gemini 回傳 HTTP 404，代表模型不存在或帳號無法使用。2026-10-11 實際驗證中，
+此帳號的 `gemini-2.5-flash` 回傳「不再提供給新使用者」；改用 `GEMINI_MODEL=gemini-3.8-flash` 後 API 與自主 MCP 工具呼叫成功。
+預設值仍依第一階段原始需求保留 gemini-2.5-flash；請以帳號當下可用模型設定 `.env`，不要將模型存取錯誤解讀成 MCP 網路問題。
+模型生命週期參考 [Google 官方文件](https://ai.google.dev/gemini-api/docs/deprecations/)。
+
 ```dotenv
 GOOGLE_API_KEY=YOUR_API_KEY_HERE
 GOOGLE_GENAI_USE_VERTEXAI=FALSE
@@ -135,6 +140,7 @@ Remove-Item Env:RUN_TOALPHA_INTEGRATION
 | Web 清單沒有 research_agent | 在 repository 根目錄執行；確認 init/agent.py 存在 |
 | 未設定 GOOGLE_API_KEY | 編輯 research_agent/.env；檢查 shell 是否有舊值覆蓋，重啟 |
 | Gemini API 401/403 | 檢查 AI Studio 金鑰與模型存取權；不要改成 Vertex AI |
+| Gemini API 404 | 將 .env 的 GEMINI_MODEL 改為帳號可用模型；本次 gemini-3.8-flash 實測成功 |
 | Gemini API 429 | 檢查 Gemini 配額，等候後重試 |
 | MCP 探索或呼叫失敗 | 檢查網路、防火牆／Proxy、ToAlpha 可用性；執行 live test |
 | ToAlpha 429 | 等候供應商額度恢復，不無限重試 |
@@ -152,11 +158,15 @@ Remove-Item Env:RUN_TOALPHA_INTEGRATION
 
 | 檢查 | 實際結果 |
 | --- | --- |
-| `python -m pytest -q` | 11 passed、1 skipped；live test 預設 skip |
+| `python -m pytest -q` | 修正錯誤提示與 Uvicorn logging 後 14 passed、1 skipped；live test 預設 skip |
 | `RUN_TOALPHA_INTEGRATION=1` 的 real_toalpha test | 1 passed；tools/list、五個工具真正呼叫、ADK toolset allowlist 探索通過 |
 | ADK Web | CLI 伺服器啟動成功；TestClient 驗證首頁 200、list-apps 包含 research_agent，AgentLoader 成功載入 |
 | `.env` 忽略與 diff 檢查 | 通過 |
 | Gemini → Agent → MCP 三題手動驗收 | 尚未執行，需要本機有效 Gemini API Key |
+
+後續問題診斷已使用本機 `.env` 做一次真實市場概況查詢：gemini-2.5-flash 回傳 HTTP 404；gemini-3.8-flash 成功自主呼叫 data_status 與 market_overview。
+三題完整手動驗收仍未全部完成。程式已修正 API 錯誤被資料不足保護訊息覆蓋的問題，並加入 404／429 等安全提示與回歸測試。
+金鑰遮罩保留 Uvicorn access log 的五個參數及狀態碼型別，避免 `expected 5, got 0`；另有實際 AccessFormatter 回歸測試。
 
 即時營收回應期別為 2026-09，市場及法人資料日期為 2026-10-08；只代表供應商這次實際回應，沒有獨立重新核算金融數值。
 ADK/MCP 套件有 experimental／deprecation warnings，測試未失敗。這些不等於 Gemini 端到端驗收已完成。

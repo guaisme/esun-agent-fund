@@ -31,7 +31,7 @@ def redact(text: str) -> str:
     key = os.getenv("GOOGLE_API_KEY", "")
     if key:
         text = text.replace(key, "[REDACTED]")
-    return re.sub(r"(?i)((?:api[_-]?key|key|authorization)\s*[=:]\s*)([^\s&,;]+)", r"\1[REDACTED]", text)
+    return re.sub(r"(?i)((?:api[_-]?key|key|authorization)\s*[=:]\s*)([^%\s&,;]+)", r"\1[REDACTED]", text)
 
 
 def configure_logging() -> None:
@@ -40,8 +40,18 @@ def configure_logging() -> None:
     if not getattr(previous, "_esun_redaction", False):
         def safe_record(*args: Any, **kwargs: Any) -> logging.LogRecord:
             record = previous(*args, **kwargs)
-            record.msg = redact(record.getMessage())
-            record.args = ()
+            # Uvicorn AccessFormatter unpacks five typed args. Preserve shape
+            # and numeric types while redacting strings before any handler runs.
+            def safe_value(value: Any) -> Any:
+                if isinstance(value, str):
+                    return redact(value)
+                if isinstance(value, tuple):
+                    return tuple(safe_value(item) for item in value)
+                if isinstance(value, dict):
+                    return {key: safe_value(item) for key, item in value.items()}
+                return value
+            record.msg = safe_value(record.msg)
+            record.args = safe_value(record.args)
             if record.exc_info:
                 record.exc_text = redact("".join(traceback.format_exception(*record.exc_info)))
                 record.exc_info = None
@@ -82,6 +92,7 @@ def text_response(message: str) -> LlmResponse:
 def begin_research(callback_context: Any) -> None:
     callback_context.state["temp:research_data_ok"] = False
     callback_context.state["temp:research_model_calls"] = 0
+    callback_context.state["temp:research_model_error"] = False
 
 
 def check_api_key(callback_context: Any, llm_request: Any) -> LlmResponse | None:
@@ -152,12 +163,31 @@ def tool_error(tool: Any, args: dict[str, Any], tool_context: Any, error: Except
 
 
 def model_error(callback_context: Any, llm_request: Any, error: Exception) -> LlmResponse:
-    LOG.error("Gemini request failed error_type=%s", type(error).__name__)
-    return text_response("Gemini API 呼叫失敗。請檢查金鑰、模型存取權、網路及 API 額度；本次研究未完成，不能宣稱取得完整結果。")
+    callback_context.state["temp:research_model_error"] = True
+    code = getattr(error, "code", None)
+    # Never include the raw exception, request URL, or credentials in the UI.
+    code = code if isinstance(code, int) else None
+    LOG.error("Gemini request failed error_type=%s http_code=%s", type(error).__name__, code)
+    hints = {
+        400: "請檢查 API Key 是否有效及請求設定。",
+        401: "請檢查 Google AI Studio API Key 是否有效。",
+        403: "請檢查 API Key 權限與 Gemini API 存取限制。",
+        404: "目前 GEMINI_MODEL 不存在或你的帳號無法使用；請在 research_agent/.env 改用帳號可用的模型，重新啟動 adk web。",
+        429: "Gemini API 配額或速率限制已達上限，請檢查額度並稍後重試。",
+    }
+    hint = hints.get(code, "請檢查金鑰、模型存取權、網路及 API 額度。")
+    status = f"（HTTP {code}）" if code else ""
+    return text_response(f"Gemini API 呼叫失敗{status}。{hint}本次研究未完成，不能宣稱取得完整結果。")
 
 
 def require_evidence(callback_context: Any, llm_response: LlmResponse) -> LlmResponse | None:
+    if callback_context.state.get("temp:research_model_error", False):
+        return None
+    if llm_response.partial or llm_response.error_code:
+        return None
     content = llm_response.content
+    if not content or not content.parts or all(part.thought for part in content.parts):
+        return None
     if content and any(part.function_call for part in content.parts or []):
         return None
     if not callback_context.state.get("temp:research_data_ok", False):
