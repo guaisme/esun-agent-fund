@@ -3,3 +3,6 @@ google-genai==2.29.0
 mcp==2.3.0
 python-dotenv==1.2.4
 pytest==9.1.1
+
+requests==2.34.2
+pyarrow==26.0.0

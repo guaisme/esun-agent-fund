@@ -6,3 +6,11 @@ __pycache__/
 .pytest_cache/
 .adk/
 *.log
+
+data/raw/
+data/processed/
+data/metadata/
+*.sqlite
+*.sqlite-*
+*.parquet
+*.tmp
