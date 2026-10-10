@@ -1,0 +1,13 @@
+version: transparent-baseline-1.0
+weights:
+  momentum_5d: 0.30
+  momentum_20d: 0.50
+  volatility_20d: -0.20
+missing_policy: exclude
+minimum_coverage: 1.0
+winsor_fraction: 0.05
+holding_counts: [20, 22, 25, 30]
+notes:
+  - 僅為透明研究基準，尚未證實因子具有預測力。
+  - 月營收及法人預設不列入必要因子，待公布時點與歷史覆蓋驗證。
+  - 固定2026官方股票名單用於歷史研究具有存活者偏誤。

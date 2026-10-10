@@ -1,0 +1,10 @@
+mode: strict_verified
+assume_previous_day_prices: true
+assume_previous_day_flows: false
+unknown_revenue_publication: exclude
+unknown_corporate_actions: block_production
+benchmark_max_age_days: 7
+notes:
+  - research_assumptions 模式明確標示前日行情可得假設與修訂時點不確定。
+  - 不得使用當日收盤、最終成交量或成交均價做盤前決策。
+  - 嚴格模式不得把今日首次下載快照當作當年公布證據。
