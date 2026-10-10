@@ -1,0 +1,56 @@
+[
+  {
+    "filename": "AI CUP 2026玉山人工智慧公開挑戰賽_比賽辦法.pdf",
+    "sha256": "55a26bb7408eedba7f3c395ca84c5d3d3d471532c5f3c01dfa2166336a983cf7",
+    "authority": "user-supplied organizer document",
+    "synthetic_example": false
+  },
+  {
+    "filename": "玉山挑戰賽_ETF投資策略說明文件_參賽隊伍繳交格式_v1.docx",
+    "sha256": "55c17d9c867026d939c49f5871f0c9f0bcc0e1ffc6b18b18a36e7c9837e490df",
+    "authority": "user-supplied organizer document",
+    "synthetic_example": false
+  },
+  {
+    "filename": "玉山挑戰賽_ETF投資策略說明文件_範例文件_v1.pdf",
+    "sha256": "bca9df0ca964b4f258959a42500716be6199343093874b6c993154edbb6e7a60",
+    "authority": "user-supplied organizer document",
+    "synthetic_example": false
+  },
+  {
+    "filename": "玉山挑戰賽_主動型ETF列表_v1.pdf",
+    "sha256": "d19cb228af7569b662cc0cfd741c726a4016ec3cc37536bf1c1d7bd891ec49d5",
+    "authority": "user-supplied organizer document",
+    "synthetic_example": false
+  },
+  {
+    "filename": "玉山挑戰賽_投資組合及交易標的_150檔清單_v1.pdf",
+    "sha256": "b6a17beb84cfbfe3db8629d6af8c2938b4443114de0d82e333bc487e4c7d8bd6",
+    "authority": "user-supplied organizer document",
+    "synthetic_example": false
+  },
+  {
+    "filename": "D-Plan.schema_v4.2.json",
+    "sha256": "8787f041c3acc3e91b3433d2a4d5edcf75b4a09e999416f64eea7627d93d36bd",
+    "authority": "user-supplied organizer document",
+    "synthetic_example": false
+  },
+  {
+    "filename": "D-Plan_撰寫指南_v4.2.md",
+    "sha256": "483365840a72bde76a6103336d8949d25d6e56ad652b26b25034ef58fe9509c6",
+    "authority": "user-supplied organizer document",
+    "synthetic_example": false
+  },
+  {
+    "filename": "D-Plan_TEAM_042_2026-10-27.json",
+    "sha256": "44a6bbfd867e5235ab32322d1937a261b9ceed792ba20ac77cac6be83579ba7c",
+    "authority": "user-supplied organizer document",
+    "synthetic_example": true
+  },
+  {
+    "filename": "D-Plan_TEAM_043_2026-10-27.json",
+    "sha256": "86f3856ba78f55b626a11afac596031e666e4529442e1f92ef0ade99699d5639",
+    "authority": "user-supplied organizer document",
+    "synthetic_example": true
+  }
+]

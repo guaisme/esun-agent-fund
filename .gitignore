@@ -14,3 +14,8 @@ data/metadata/
 *.sqlite-*
 *.parquet
 *.tmp
+
+docs/official/*.pdf
+docs/official/*.docx
+outputs/
+config/local*.yaml

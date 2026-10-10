@@ -1,0 +1,24 @@
+{
+  "team_id": "TEAM_11586",
+  "start_date": "2026-10-26",
+  "end_date": "2026-11-27",
+  "initial_cash_ntd": "1000000000",
+  "lot_size": 1000,
+  "min_holdings": 20,
+  "max_holdings": 30,
+  "commission_rate": "0.001425",
+  "sell_tax_rate": "0.003",
+  "cash_quantum_ntd": "0.01",
+  "cash_rounding": "ROUND_HALF_UP",
+  "cash_rounding_confirmed": false,
+  "missing_execution_policy": "block",
+  "missing_execution_confirmed": false,
+  "active_share_method": "raw",
+  "active_share_method_confirmed": false,
+  "competition_first_session_confirmed": false,
+  "notes": [
+    "2026-10-26 is an exchange holiday; organizer first-submission instructions unconfirmed.",
+    "Rounding policy is a transparent research assumption, not verified organizer rounding.",
+    "Guide and regulations differ on missing execution prices; production remains BLOCKED."
+  ]
+}
