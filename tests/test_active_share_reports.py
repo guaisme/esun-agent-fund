@@ -303,3 +303,124 @@ def test_code_fingerprint_git_timeout_preserves_content_hashes(monkeypatch):
     result = code_fingerprint()
     assert result["git_commit"] == "unknown"
     assert "src/portfolio/active_share.py" in result["file_hashes"]
+
+
+def test_numeric_as_dictionary_cannot_certify_production_even_with_flags():
+    from src.portfolio.compliance import ComplianceEngine
+    from src.competition.policy import CompetitionPolicy
+    from src.competition.simulator import mark_to_market
+    from test_simulator import initial, bars
+
+    state = initial().state
+    nav = mark_to_market(state, bars("2026-10-28"), "2026-10-28")
+    required = ActiveETFLoader().tickers()
+    report = ComplianceEngine(
+        CompetitionPolicy(active_share_method_confirmed=True)
+    ).post_trade(state, nav, set(), {t: D("0.5") for t in required}, required)
+    assert not report.verified and not report.active_share_streaks
+    assert any(v.code == "active_share_evidence" for v in report.violations)
+
+
+def test_rollback_as_counters_follow_retained_holdings_not_rejected_targets():
+    from src.competition.policy import CompetitionPolicy
+    from src.competition.simulator import PortfolioSimulator, mark_to_market
+    from src.competition.models import TradeOrder
+    from test_simulator import initial, bars, DAYS as FIXTURE_DAYS
+
+    state = initial().state
+    state.active_share_streaks = {t: 0 for t in ActiveETFLoader().tickers()}
+    state.active_share_last_date = "2026-10-27"
+    nav = mark_to_market(state, bars("2026-10-28"), "2026-10-28")
+    top = dict(sorted(nav.weights.items(), key=lambda r: (-r[1], r[0]))[:10])
+    sold = next(iter(top))
+    top[sold] += D("0.38")  # MOCK: retained AS=.19; sold candidate AS>.20.
+    benchmark_rows = [
+        replace(
+            r,
+            weights=top,
+            content_as_of="2026-10-28T16:00:00+08:00",
+            available_at="2026-10-28T17:00:00+08:00",
+        )
+        for r in snapshots()
+    ]
+    result = PortfolioSimulator(
+        CompetitionPolicy(active_share_method_confirmed=True)
+    ).execute_day(
+        state,
+        "2026-10-28",
+        [TradeOrder(sold, "SELL", state.positions[sold].shares)],
+        bars("2026-10-28"),
+        trading_days=FIXTURE_DAYS,
+        calendar_verified=False,
+        strict=False,
+        fixture_mode=True,
+        benchmark_snapshots=benchmark_rows,
+        benchmark_cutoff=datetime.fromisoformat("2026-10-29T08:30:00+08:00"),
+    )
+    assert (
+        result.status == "REJECTED"
+        and len(result.state.positions) == 20
+        and not result.executions
+    )
+    assert all(v == 1 for v in result.state.active_share_streaks.values())
+    assert all(v == 0 for v in state.active_share_streaks.values())
+    assert result.state.active_share_last_date == "2026-10-28"
+
+
+def test_settled_trade_date_does_not_prove_previous_as_evidence():
+    from src.portfolio.compliance import ComplianceEngine
+    from src.competition.policy import CompetitionPolicy
+    from src.competition.simulator import mark_to_market
+    from test_simulator import initial, bars, DAYS as FIXTURE_DAYS
+
+    state = initial().state
+    state.last_trade_date = "2026-10-28"  # MOCK: ledger advanced without AS evidence.
+    state.active_share_last_date = "2026-10-27"
+    state.active_share_streaks = {t: 1 for t in ActiveETFLoader().tickers()}
+    rows = [
+        replace(
+            r,
+            content_as_of="2026-10-29T16:00:00+08:00",
+            available_at="2026-10-29T17:00:00+08:00",
+        )
+        for r in snapshots()
+    ]
+    nav = mark_to_market(state, bars("2026-10-29"), "2026-10-29")
+    report = ComplianceEngine(
+        CompetitionPolicy(active_share_method_confirmed=True)
+    ).post_trade(
+        state,
+        nav,
+        set(),
+        None,
+        ActiveETFLoader().tickers(),
+        strict=False,
+        fixture_mode=True,
+        benchmark_snapshots=rows,
+        benchmark_cutoff=datetime.fromisoformat("2026-10-30T08:30:00+08:00"),
+        trading_days=FIXTURE_DAYS,
+    )
+    assert not report.verified and not report.failed
+    assert all(v == 1 for v in report.active_share_streaks.values())
+    assert report.active_share_date == "2026-10-27"
+
+
+def test_as_evidence_date_is_serialized_and_old_ledgers_remain_loadable():
+    from src.competition.serialization import json_value, load_state
+
+    state = PortfolioState(
+        last_trade_date="2026-10-28", active_share_last_date="2026-10-27"
+    )
+    assert load_state(json_value(state)).active_share_last_date == "2026-10-27"
+    assert (
+        load_state({"cash": "1000000000", "positions": {}}).active_share_last_date
+        is None
+    )
+
+
+@pytest.mark.parametrize("minimum", ["0.19", "0.21"])
+def test_official_as_minimum_cannot_be_reconfigured(minimum):
+    from src.competition.policy import CompetitionPolicy
+
+    with pytest.raises(ValueError):
+        CompetitionPolicy(active_share_min=D(minimum))

@@ -30,12 +30,18 @@ class CompetitionPolicy:
             object.__setattr__(self, name, value)
             if not 0 < value <= 1:
                 raise AccountingError("Invalid ratio policy")
-        if self.lot_size != 1000 or not 20 <= self.min_holdings <= self.max_holdings <= 30:
-            raise AccountingError("Policy may not relax official holdings or lot constraints")
+        if (
+            self.lot_size != 1000
+            or not 20 <= self.min_holdings <= self.max_holdings <= 30
+        ):
+            raise AccountingError(
+                "Policy may not relax official holdings or lot constraints"
+            )
         if (
             self.tsmc_cap > Decimal("0.25")
             or self.stock_cap > Decimal("0.10")
             or self.cash_cap > Decimal("0.25")
+            or self.active_share_min != Decimal("0.20")
         ):
             raise AccountingError("Policy may not relax official weight/cash limits")
         if (
@@ -43,7 +49,9 @@ class CompetitionPolicy:
             or self.warning_limit != 3
             or self.active_share_breach_days != 2
         ):
-            raise AccountingError("Official grace and disqualification rules cannot be relaxed")
+            raise AccountingError(
+                "Official grace and disqualification rules cannot be relaxed"
+            )
         if self.missing_execution not in {"block", "reject_day", "skip_order"}:
             raise AccountingError("Unknown missing-price policy")
 

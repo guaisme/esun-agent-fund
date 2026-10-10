@@ -2,6 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from datetime import datetime
+
+from .active_share import (
+    ActiveETFLoader,
+    ActiveShareCalculator,
+    ActiveShareValidator,
+    BenchmarkHoldings,
+)
 
 from src.competition.models import ComplianceViolation, DailyNAV, PortfolioState
 from src.competition.policy import CompetitionPolicy
@@ -12,6 +20,7 @@ class ComplianceReport:
     violations: tuple[ComplianceViolation, ...]
     overweight_streaks: dict[str, int]
     active_share_streaks: dict[str, int]
+    active_share_date: str | None = None
 
     @property
     def failed(self) -> bool:
@@ -34,6 +43,12 @@ class ComplianceEngine:
         active_shares: dict[str, Decimal] | None,
         required_benchmarks: set[str],
         strict: bool = True,
+        *,
+        fixture_mode: bool = False,
+        benchmark_snapshots: list[BenchmarkHoldings] | None = None,
+        benchmark_cutoff: datetime | None = None,
+        trading_days: set[str] | None = None,
+        active_share_method: str = "raw",
     ) -> ComplianceReport:
         """One invocation per official session, with no mutation of input state."""
         issues: list[ComplianceViolation] = []
@@ -77,9 +92,59 @@ class ComplianceEngine:
                         ticker,
                     )
                 )
-        active_streaks: dict[str, int] = {}
+        active_streaks: dict[str, int] = dict(state.active_share_streaks)
         values = active_shares or {}
-        from .active_share import ActiveETFLoader
+        active_date = state.active_share_last_date
+        if (
+            benchmark_snapshots is not None
+            and benchmark_cutoff is not None
+            and trading_days
+        ):
+            calculation = ActiveShareCalculator().evaluate(
+                nav.weights,
+                benchmark_snapshots,
+                benchmark_cutoff,
+                active_share_method,
+                method_confirmed=self.policy.active_share_method_confirmed,
+                fixture=fixture_mode,
+            )
+            previous_verified = (
+                set(state.active_share_streaks) == ActiveETFLoader().tickers()
+            )
+            proof = ActiveShareValidator().validate(
+                calculation,
+                nav.trade_date,
+                trading_days,
+                previous_date=(
+                    state.active_share_last_date if previous_verified else None
+                ),
+                previous_streaks=state.active_share_streaks,
+            )
+            if proof["streaks_advanced"]:
+                values = {
+                    row["benchmark_id"]: row["active_share"]
+                    for row in calculation["records"]
+                }
+                active_streaks = proof["streaks"]
+                active_date = nav.trade_date
+                required_benchmarks = ActiveETFLoader().tickers()
+            else:
+                values = {}
+                issues.append(
+                    ComplianceViolation(
+                        "active_share_evidence", "UNVERIFIED", proof["reason"]
+                    )
+                )
+        elif benchmark_snapshots is not None or not fixture_mode:
+            # A numeric dictionary is a research estimate, never source/time proof.
+            values = {}
+            issues.append(
+                ComplianceViolation(
+                    "active_share_evidence",
+                    "UNVERIFIED",
+                    "Structured same-session benchmark snapshots and consecutive-session evidence required",
+                )
+            )
 
         if strict and required_benchmarks != ActiveETFLoader().tickers():
             issues.append(
@@ -111,11 +176,17 @@ class ComplianceEngine:
                 )
                 continue
             streak = (
-                state.active_share_streaks.get(benchmark, 0) + 1
-                if value < self.policy.active_share_min
-                else 0
+                active_streaks.get(benchmark, 0)
+                if benchmark_snapshots is not None
+                else (
+                    state.active_share_streaks.get(benchmark, 0) + 1
+                    if value < self.policy.active_share_min
+                    else 0
+                )
             )
             active_streaks[benchmark] = streak
+            if fixture_mode and benchmark_snapshots is None:
+                active_date = nav.trade_date
             if streak >= self.policy.active_share_breach_days:
                 issues.append(
                     ComplianceViolation(
@@ -140,4 +211,4 @@ class ComplianceEngine:
                     "Top-10 raw/renormalized methodology awaits organizer confirmation",
                 )
             )
-        return ComplianceReport(tuple(issues), overweight, active_streaks)
+        return ComplianceReport(tuple(issues), overweight, active_streaks, active_date)

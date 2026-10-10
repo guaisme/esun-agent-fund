@@ -13,7 +13,9 @@ class AccountingError(ValueError):
 def decimal(value: Decimal | str | int) -> Decimal:
     # Reject binary floats at the accounting boundary, including bool (an int subclass).
     if isinstance(value, (float, bool)):
-        raise AccountingError("Accounting values require Decimal, integer or decimal string")
+        raise AccountingError(
+            "Accounting values require Decimal, integer or decimal string"
+        )
     try:
         result = Decimal(value)
     except (ValueError, TypeError, ArithmeticError) as exc:
@@ -84,7 +86,9 @@ class TransactionCosts:
         gross = decimal(gross)
         if gross < 0 or side not in {"BUY", "SELL"}:
             raise AccountingError("Invalid fee request")
-        commission = (gross * self.commission_rate).quantize(self.quantum, rounding=self.rounding)
+        commission = (gross * self.commission_rate).quantize(
+            self.quantum, rounding=self.rounding
+        )
         tax = (
             (gross * self.sell_tax_rate).quantize(self.quantum, rounding=self.rounding)
             if side == "SELL"
@@ -143,14 +147,20 @@ class PriceBar:
             object.__setattr__(self, "turnover", decimal(self.turnover))
             if self.turnover < 0:
                 raise AccountingError("Negative turnover")
-        if self.volume is not None and (type(self.volume) is not int or self.volume < 0):
+        if self.volume is not None and (
+            type(self.volume) is not int or self.volume < 0
+        ):
             raise AccountingError("Volume must be non-negative integer shares")
         if self.volume_unit != "shares" or self.turnover_unit != "NTD":
-            raise AccountingError("Execution requires shares and NTD, never lots or thousands")
+            raise AccountingError(
+                "Execution requires shares and NTD, never lots or thousands"
+            )
 
     def execution_price(self) -> Decimal:
         if not self.volume or self.turnover is None or self.turnover <= 0:
-            raise AccountingError(f"No verified daily average execution price: {self.ticker}")
+            raise AccountingError(
+                f"No verified daily average execution price: {self.ticker}"
+            )
         return self.turnover / Decimal(self.volume)
 
 
@@ -169,10 +179,15 @@ class CorporateAction:
         Position(self.ticker, 1)
         day(self.effective_date)
         object.__setattr__(self, "value", decimal(self.value))
-        if self.kind not in {"cash_dividend", "split", "stock_dividend"} or self.value <= 0:
+        if (
+            self.kind not in {"cash_dividend", "split", "stock_dividend"}
+            or self.value <= 0
+        ):
             raise AccountingError("Invalid corporate action")
         if not self.action_id or not self.source or not self.verified:
-            raise AccountingError("Corporate action requires verifiable source and unique ID")
+            raise AccountingError(
+                "Corporate action requires verifiable source and unique ID"
+            )
         stamp = datetime.fromisoformat(self.available_at)
         if stamp.tzinfo is None:
             raise AccountingError("Corporate-action availability requires timezone")
@@ -191,6 +206,7 @@ class PortfolioState:
     active_share_streaks: dict[str, int] = field(default_factory=dict)
     applied_actions: set[str] = field(default_factory=set)
     dividends_settled: bool = False
+    active_share_last_date: str | None = None
 
     def __post_init__(self) -> None:
         self.cash = decimal(self.cash)
@@ -199,7 +215,18 @@ class PortfolioState:
             raise AccountingError("Negative cash or dividend balance")
         if self.last_trade_date:
             day(self.last_trade_date)
-        if any(ticker != position.ticker for ticker, position in self.positions.items()):
+        if self.active_share_last_date:
+            day(self.active_share_last_date)
+            if (
+                not self.last_trade_date
+                or self.active_share_last_date > self.last_trade_date
+            ):
+                raise AccountingError(
+                    "Active Share evidence date exceeds settled ledger session"
+                )
+        if any(
+            ticker != position.ticker for ticker, position in self.positions.items()
+        ):
             raise AccountingError("Position dictionary key differs from ticker")
 
 

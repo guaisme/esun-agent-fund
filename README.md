@@ -444,4 +444,5 @@ CLI填完Word會回報 VISUAL_QA_REQUIRED，不自行宣稱版面驗收或重新
 
 `ActiveShareCalculator.evaluate()` 逐一輸出官方30檔ETF的持股時點、可得時間、來源、方法、Active Share及缺漏原因。缺失持股不補零；方法未確認不回報合規通過。Optimizer 有提供結構化基準資料時會檢查，資料不足時仍保留研究提案但正式就緒維持 BLOCKED。
 `ActiveShareValidator.validate()` 使用競賽交易日集合、同日可得基準和前日已驗證計數；跳日、重跑、缺前日證據或拿舊持股判斷新交易日都不能更新正式計數。這項獨立檢查不替代官方結算對帳。
+模擬器可接收 `benchmark_snapshots`、`benchmark_cutoff` 與 `active_share_method`，由當日NAV權重重新計算；正式檢查不接受單純AS數值字典。帳簿另存 `active_share_last_date`，交易日期推進不代表AS已驗證；缺證據的研究日不能接成連續違規。交易回滾後使用实际保留部位的AS計數，原輸入帳簿不被修改。
 產業集中度只使用截止前可得、來源明確的分類；未知分類另外列出。產業35%是內部警示，並非主辦方法定限制。

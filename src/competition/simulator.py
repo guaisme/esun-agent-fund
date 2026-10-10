@@ -6,6 +6,7 @@ from decimal import Decimal, localcontext
 
 from src.data.universe import UniverseLoader
 from src.portfolio.compliance import ComplianceEngine
+from src.portfolio.active_share import BenchmarkHoldings
 from .models import (
     AccountingError,
     ComplianceViolation,
@@ -24,7 +25,9 @@ from .policy import CompetitionPolicy
 from .corporate_actions import CompetitionCorporateActionPolicy
 
 
-def mark_to_market(state: PortfolioState, bars: dict[str, PriceBar], trade_date: str) -> DailyNAV:
+def mark_to_market(
+    state: PortfolioState, bars: dict[str, PriceBar], trade_date: str
+) -> DailyNAV:
     with localcontext() as context:
         context.prec = 50
         values: dict[str, Decimal] = {}
@@ -62,7 +65,9 @@ class PortfolioSimulator:
     """
 
     def __init__(
-        self, policy: CompetitionPolicy | None = None, costs: TransactionCosts | None = None
+        self,
+        policy: CompetitionPolicy | None = None,
+        costs: TransactionCosts | None = None,
     ) -> None:
         self.policy = policy or CompetitionPolicy()
         self.costs = costs or TransactionCosts()
@@ -87,30 +92,46 @@ class PortfolioSimulator:
         fixture_mode: bool = False,
         settle_dividends: bool = False,
         competition_end: str = "2026-11-27",
+        benchmark_snapshots: list[BenchmarkHoldings] | None = None,
+        benchmark_cutoff: datetime | None = None,
+        active_share_method: str = "raw",
     ) -> SimulationResult:
         day(trade_date)
         if any(not self.universe.is_valid_ticker(ticker) for ticker in state.positions):
-            raise AccountingError("Settled state contains stock outside official universe")
+            raise AccountingError(
+                "Settled state contains stock outside official universe"
+            )
         if state.last_trade_date and trade_date <= state.last_trade_date:
-            raise AccountingError("Duplicate or out-of-order session; ledger replay prohibited")
+            raise AccountingError(
+                "Duplicate or out-of-order session; ledger replay prohibited"
+            )
         if state.disqualified:
             return SimulationResult(
                 "DISQUALIFIED", deepcopy(state), None, (), (), trade_date, fixture_mode
             )
         if trade_date not in trading_days:
-            raise AccountingError("Not a calendar trading session; weekday alone is insufficient")
+            raise AccountingError(
+                "Not a calendar trading session; weekday alone is insufficient"
+            )
         if any(
-            ticker != bar.ticker or bar.trade_date != trade_date for ticker, bar in bars.items()
+            ticker != bar.ticker or bar.trade_date != trade_date
+            for ticker, bar in bars.items()
         ):
-            raise AccountingError("Execution bars must match ticker keys and the trade session")
+            raise AccountingError(
+                "Execution bars must match ticker keys and the trade session"
+            )
         if any(bar.synthetic for bar in bars.values()) and not fixture_mode:
             raise AccountingError("Synthetic prices require explicit fixture mode")
         if fixture_mode and strict:
-            raise AccountingError("Synthetic fixtures cannot certify production compliance")
+            raise AccountingError(
+                "Synthetic fixtures cannot certify production compliance"
+            )
         blocked = []
         if strict and not calendar_verified:
             blocked.append(
-                ComplianceViolation("calendar", "UNVERIFIED", "Exchange calendar not verified")
+                ComplianceViolation(
+                    "calendar", "UNVERIFIED", "Exchange calendar not verified"
+                )
             )
         if strict and not self.policy.cash_rounding_confirmed:
             blocked.append(
@@ -122,7 +143,13 @@ class PortfolioSimulator:
             )
         if blocked:
             return SimulationResult(
-                "BLOCKED", deepcopy(state), None, (), tuple(blocked), trade_date, fixture_mode
+                "BLOCKED",
+                deepcopy(state),
+                None,
+                (),
+                tuple(blocked),
+                trade_date,
+                fixture_mode,
             )
         baseline = deepcopy(state)
         self._apply_actions(baseline, trade_date, corporate_actions, decision_cutoff)
@@ -142,7 +169,10 @@ class PortfolioSimulator:
             if not self.universe.is_valid_ticker(order.ticker):
                 order_errors.append(
                     ComplianceViolation(
-                        "universe", "HARD_FAIL", "Outside official 150-stock universe", order.ticker
+                        "universe",
+                        "HARD_FAIL",
+                        "Outside official 150-stock universe",
+                        order.ticker,
                     )
                 )
             held = baseline.positions.get(order.ticker)
@@ -157,7 +187,9 @@ class PortfolioSimulator:
                 )
         if settle_dividends:
             if trade_date != competition_end or baseline.dividends_settled:
-                raise AccountingError("Deferred dividend settlement only once on competition end")
+                raise AccountingError(
+                    "Deferred dividend settlement only once on competition end"
+                )
             baseline.cash += baseline.deferred_dividends
             baseline.deferred_dividends = Decimal(0)
             baseline.dividends_settled = True
@@ -174,7 +206,9 @@ class PortfolioSimulator:
                 fixture_mode,
             )
         if order_errors:
-            return self._reject_day(baseline, baseline_nav, trade_date, order_errors, fixture_mode)
+            return self._reject_day(
+                baseline, baseline_nav, trade_date, order_errors, fixture_mode
+            )
         candidate = deepcopy(baseline)
         executions = []
         skipped: list[ComplianceViolation] = []
@@ -196,7 +230,13 @@ class PortfolioSimulator:
                         strict and not self.policy.missing_execution_confirmed
                     ):
                         return SimulationResult(
-                            "BLOCKED", deepcopy(state), None, (), (issue,), trade_date, fixture_mode
+                            "BLOCKED",
+                            deepcopy(state),
+                            None,
+                            (),
+                            (issue,),
+                            trade_date,
+                            fixture_mode,
                         )
                     if self.policy.missing_execution == "reject_day":
                         return self._reject_day(
@@ -215,10 +255,14 @@ class PortfolioSimulator:
                     candidate.cash += gross - commission - tax
                     new_shares = old_shares - order.shares
                 if new_shares:
-                    candidate.positions[order.ticker] = Position(order.ticker, new_shares)
+                    candidate.positions[order.ticker] = Position(
+                        order.ticker, new_shares
+                    )
                 else:
                     candidate.positions.pop(order.ticker, None)
-                executions.append(TradeExecution(order, price, gross, commission, tax, bar.source))
+                executions.append(
+                    TradeExecution(order, price, gross, commission, tax, bar.source)
+                )
             try:
                 nav = mark_to_market(candidate, bars, trade_date)
             except AccountingError as exc:
@@ -231,6 +275,15 @@ class PortfolioSimulator:
                     trade_date,
                     fixture_mode,
                 )
+            evidence_inputs = dict(
+                fixture_mode=fixture_mode,
+                benchmark_snapshots=benchmark_snapshots,
+                benchmark_cutoff=benchmark_cutoff,
+                trading_days={
+                    d for d in trading_days if "2026-10-26" <= d <= competition_end
+                },
+                active_share_method=active_share_method,
+            )
             report = self.compliance.post_trade(
                 candidate,
                 nav,
@@ -238,32 +291,91 @@ class PortfolioSimulator:
                 active_shares,
                 required_benchmarks or set(),
                 strict,
+                **evidence_inputs,
             )
             issues = list(report.violations) + skipped
             if strict and not report.verified:
                 return SimulationResult(
-                    "BLOCKED", deepcopy(state), None, (), tuple(issues), trade_date, fixture_mode
-                )
-            if any(v.code == "active_share_disqualification" for v in issues):
-                # Active Share is evaluated on end-of-day holdings even if another rule breaches.
-                baseline.active_share_streaks = report.active_share_streaks
-                baseline.disqualified = True
-                baseline.last_trade_date = trade_date
-                return SimulationResult(
-                    "DISQUALIFIED",
-                    baseline,
-                    baseline_nav,
+                    "BLOCKED",
+                    deepcopy(state),
+                    None,
                     (),
                     tuple(issues),
                     trade_date,
                     fixture_mode,
                 )
             if report.failed:
-                return self._reject_day(baseline, baseline_nav, trade_date, issues, fixture_mode)
+                # Invalid trades are rolled back. Compare the holdings that
+                # actually remain, never carry a rejected candidate's counters.
+                retained = self.compliance.post_trade(
+                    baseline,
+                    baseline_nav,
+                    set(),
+                    active_shares,
+                    required_benchmarks or set(),
+                    strict,
+                    **evidence_inputs,
+                )
+                if strict and not retained.verified:
+                    return SimulationResult(
+                        "BLOCKED",
+                        deepcopy(state),
+                        None,
+                        (),
+                        retained.violations,
+                        trade_date,
+                        fixture_mode,
+                    )
+                issues = [
+                    v
+                    for v in issues
+                    if v.code
+                    not in {
+                        "active_share_disqualification",
+                        "active_share_first_breach",
+                    }
+                ]
+                issues.extend(
+                    v
+                    for v in retained.violations
+                    if v.code
+                    in {"active_share_disqualification", "active_share_first_breach"}
+                )
+                if any(
+                    v.code == "active_share_disqualification" for v in report.violations
+                ) and not any(
+                    v.code == "active_share_disqualification"
+                    for v in retained.violations
+                ):
+                    issues.append(
+                        ComplianceViolation(
+                            "active_share_candidate",
+                            "WARNING",
+                            "Rejected candidate breached Active Share; official counters use retained holdings",
+                        )
+                    )
+                baseline.active_share_streaks = retained.active_share_streaks
+                baseline.active_share_last_date = retained.active_share_date
+                if any(v.code == "active_share_disqualification" for v in issues):
+                    baseline.disqualified = True
+                    baseline.last_trade_date = trade_date
+                    return SimulationResult(
+                        "DISQUALIFIED",
+                        baseline,
+                        baseline_nav,
+                        (),
+                        tuple(issues),
+                        trade_date,
+                        fixture_mode,
+                    )
+                return self._reject_day(
+                    baseline, baseline_nav, trade_date, issues, fixture_mode
+                )
             candidate.initialized = True
             candidate.last_trade_date = trade_date
             candidate.overweight_streaks = report.overweight_streaks
             candidate.active_share_streaks = report.active_share_streaks
+            candidate.active_share_last_date = report.active_share_date
             return SimulationResult(
                 "EXECUTED",
                 candidate,
@@ -310,12 +422,19 @@ class PortfolioSimulator:
         cutoff: str | None,
     ) -> None:
         if actions and cutoff is None:
-            raise AccountingError("Corporate actions require an explicit availability cutoff")
+            raise AccountingError(
+                "Corporate actions require an explicit availability cutoff"
+            )
         for action in actions:
             self.corporate_action_policy.validate(action)
-            if action.effective_date != trade_date or action.action_id in state.applied_actions:
+            if (
+                action.effective_date != trade_date
+                or action.action_id in state.applied_actions
+            ):
                 raise AccountingError("Wrong-date or already applied corporate action")
-            if datetime.fromisoformat(action.available_at) > datetime.fromisoformat(cutoff):
+            if datetime.fromisoformat(action.available_at) > datetime.fromisoformat(
+                cutoff
+            ):
                 raise AccountingError("Future corporate-action information")
             if not self.universe.is_valid_ticker(action.ticker):
                 raise AccountingError("Corporate action outside universe")
@@ -324,11 +443,17 @@ class PortfolioSimulator:
                 if action.kind == "cash_dividend":
                     state.deferred_dividends += position.shares * action.value
                 else:
-                    ratio = action.value if action.kind == "split" else Decimal(1) + action.value
+                    ratio = (
+                        action.value
+                        if action.kind == "split"
+                        else Decimal(1) + action.value
+                    )
                     shares = Decimal(position.shares) * ratio
                     if shares != shares.to_integral_value():
                         raise AccountingError(
                             "Fractional corporate-action shares require verified settlement policy"
                         )
-                    state.positions[action.ticker] = Position(action.ticker, int(shares))
+                    state.positions[action.ticker] = Position(
+                        action.ticker, int(shares)
+                    )
             state.applied_actions.add(action.action_id)
