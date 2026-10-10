@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from decimal import Decimal
+from datetime import timedelta
+from src.competition.models import day
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -39,7 +41,14 @@ class InvestmentDecision(BaseModel):
     @model_validator(mode="after")
     def check(self):
         universe = UniverseLoader()
-        aware(self.data_cutoff)
+        day(self.trade_date)
+        if (
+            aware(self.data_cutoff).utcoffset() != timedelta(hours=8)
+            or self.data_cutoff[:10] > self.trade_date
+        ):
+            raise ValueError("Cutoff must be +08:00 and no later than trade date")
+        if not {t for t, w in self.target_weights.items() if w > 0} <= set(self.candidates):
+            raise ValueError("Positive targets must be explicitly selected candidates")
         if len(set(self.candidates)) != len(self.candidates):
             raise ValueError("Duplicate candidates")
         if any(

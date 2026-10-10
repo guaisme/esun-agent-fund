@@ -36,13 +36,14 @@ class DecisionContext:
             raise ValueError("Fixture and availability mode disagree")
 
 
-def readonly_tools(context: DecisionContext) -> list:
+def readonly_tools(context: DecisionContext, optimizer: PortfolioOptimizer | None = None) -> list:
     """Closures expose a frozen copy of cutoff-filtered inputs, never execution bars.
 
     There is no filesystem/network/SQL interface through which Gemini can query
     future rows. Missing market/ETF evidence stays missing and visible.
     """
     context = deepcopy(context)
+    optimizer = optimizer or PortfolioOptimizer()
 
     def get_portfolio() -> dict:
         """Get settled cash, holdings, previous NAV and previous official closes."""
@@ -75,7 +76,7 @@ def readonly_tools(context: DecisionContext) -> list:
             {
                 "ticker": ticker,
                 "values": context.snapshot.values[ticker],
-                "provenance": context.snapshot.provenance.get(ticker, []),
+                "provenance": context.snapshot.provenance.get(ticker, [])[-25:],
                 "data_cutoff": context.data_cutoff,
             }
         )
@@ -117,7 +118,7 @@ def readonly_tools(context: DecisionContext) -> list:
         import json
 
         targets = {t: Decimal(str(w)) for t, w in json.loads(target_weights_json).items()}
-        result = PortfolioOptimizer().optimize(
+        result = optimizer.optimize(
             rankings=context.rankings["rankings"],
             state=context.state,
             previous_nav=context.previous_nav,
@@ -140,8 +141,10 @@ def readonly_tools(context: DecisionContext) -> list:
         return {
             "mode": context.snapshot.mode,
             "data_cutoff": context.data_cutoff,
-            "issues": list(context.snapshot.quality_issues),
-            "excluded": list(context.snapshot.excluded),
+            "issue_count": len(context.snapshot.quality_issues),
+            "issues_sample": list(context.snapshot.quality_issues)[:30],
+            "excluded_count": len(context.snapshot.excluded),
+            "excluded_sample": list(context.snapshot.excluded)[:30],
             "benchmark_status": context.benchmark_evidence.get("status", "UNVERIFIED"),
         }
 

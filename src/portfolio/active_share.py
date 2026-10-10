@@ -4,8 +4,38 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Literal
+from pathlib import Path
+import csv
+import json
+
+from src.data.universe import ROOT
 
 from src.competition.models import AccountingError, decimal
+
+
+class ActiveETFLoader:
+    def __init__(
+        self,
+        path: Path = ROOT / "config/active_etfs.csv",
+        manifest: Path = ROOT / "config/active_etfs_manifest.json",
+    ):
+        self.path, self.manifest = path, manifest
+
+    def load(self) -> list[dict]:
+        with self.path.open(encoding="utf-8-sig", newline="") as file:
+            rows = list(csv.DictReader(file))
+        official = json.loads(self.manifest.read_text(encoding="utf-8"))["etfs"]
+        if (
+            len(rows) != 30
+            or len({r["ticker"] for r in rows}) != 30
+            or sorted(rows, key=lambda r: r["ticker"])
+            != sorted(official, key=lambda r: r["ticker"])
+        ):
+            raise AccountingError("Active ETF list differs from all 30 official benchmarks")
+        return rows
+
+    def tickers(self) -> set[str]:
+        return {r["ticker"] for r in self.load()}
 
 
 @dataclass(frozen=True)
@@ -99,6 +129,10 @@ class BenchmarkHoldingsProvider:
         max_age_days: int = 7,
         fixture: bool = False,
     ) -> dict[str, Decimal]:
+        if not fixture and required != ActiveETFLoader().tickers():
+            raise AccountingError(
+                "Missing full production benchmark set: Active Share requires all 30 official ETFs"
+            )
         if {row.ticker for row in snapshots} != required or len(snapshots) != len(required):
             raise AccountingError("Missing or duplicate official active-ETF benchmark snapshots")
         result = {}

@@ -140,6 +140,26 @@ class PortfolioOptimizer:
                     modifications.append(
                         {"type": "cost_hysteresis", "retained": old, "rejected_replacement": new}
                     )
+        if state.initialized and proposed_targets is None:
+            # Budget new-name replacements before equal-weight allocation.
+            # Actual lot/cost turnover is still checked below; this is a
+            # conservative selection heuristic, not a relaxation of the cap.
+            per_replacement = Decimal(2) * (1 - cash_target) / self.config.holdings
+            allowed_replacements = int(self.config.turnover_cap / per_replacement)
+            entrants = sorted(
+                (t for t in selected if t not in state.positions), key=lambda t: (scores[t], t)
+            )
+            retainable = sorted(
+                (t for t in state.positions if t in scores and t not in selected),
+                key=lambda t: (-scores[t], t),
+            )
+            excess = max(0, len(entrants) - allowed_replacements)
+            for old, new in zip(retainable, entrants[:excess]):
+                selected.remove(new)
+                selected.append(old)
+                modifications.append(
+                    {"type": "turnover_hysteresis", "retained": old, "rejected_replacement": new}
+                )
         with localcontext() as context:
             context.prec = 50
             if proposed_targets is not None:
@@ -195,7 +215,10 @@ class PortfolioOptimizer:
                             * decimal(previous_closes[ticker])
                             / previous_nav
                         )
-                        if held_target <= self.policy.cap(ticker):
+                        if (
+                            held_target <= self.policy.cap(ticker)
+                            and held_target != targets[ticker]
+                        ):
                             modifications.append(
                                 {
                                     "type": "no_trade_band",

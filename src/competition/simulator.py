@@ -25,25 +25,32 @@ from .corporate_actions import CompetitionCorporateActionPolicy
 
 
 def mark_to_market(state: PortfolioState, bars: dict[str, PriceBar], trade_date: str) -> DailyNAV:
-    values: dict[str, Decimal] = {}
-    for ticker, position in state.positions.items():
-        bar = bars.get(ticker)
-        if bar is None or bar.trade_date != trade_date or bar.ticker != ticker or bar.close is None:
-            raise AccountingError(f"Missing same-session valuation close: {ticker}")
-        values[ticker] = bar.close * position.shares
-    market_value = sum(values.values(), Decimal(0))
-    nav = market_value + state.cash
-    if nav <= 0:
-        raise AccountingError("NAV must remain positive")
-    return DailyNAV(
-        trade_date,
-        state.cash,
-        market_value,
-        nav,
-        state.deferred_dividends,
-        {ticker: value / nav for ticker, value in values.items()},
-        state.cash / nav,
-    )
+    with localcontext() as context:
+        context.prec = 50
+        values: dict[str, Decimal] = {}
+        for ticker, position in state.positions.items():
+            bar = bars.get(ticker)
+            if (
+                bar is None
+                or bar.trade_date != trade_date
+                or bar.ticker != ticker
+                or bar.close is None
+            ):
+                raise AccountingError(f"Missing same-session valuation close: {ticker}")
+            values[ticker] = bar.close * position.shares
+        market_value = sum(values.values(), Decimal(0))
+        nav = market_value + state.cash
+        if nav <= 0:
+            raise AccountingError("NAV must remain positive")
+        return DailyNAV(
+            trade_date,
+            state.cash,
+            market_value,
+            nav,
+            state.deferred_dividends,
+            {ticker: value / nav for ticker, value in values.items()},
+            state.cash / nav,
+        )
 
 
 class PortfolioSimulator:
@@ -117,6 +124,8 @@ class PortfolioSimulator:
             return SimulationResult(
                 "BLOCKED", deepcopy(state), None, (), tuple(blocked), trade_date, fixture_mode
             )
+        baseline = deepcopy(state)
+        self._apply_actions(baseline, trade_date, corporate_actions, decision_cutoff)
         seen: set[str] = set()
         order_errors = []
         for order in orders:
@@ -136,7 +145,7 @@ class PortfolioSimulator:
                         "universe", "HARD_FAIL", "Outside official 150-stock universe", order.ticker
                     )
                 )
-            held = state.positions.get(order.ticker)
+            held = baseline.positions.get(order.ticker)
             if order.side == "SELL" and (held is None or held.shares < order.shares):
                 order_errors.append(
                     ComplianceViolation(
@@ -146,8 +155,6 @@ class PortfolioSimulator:
                         order.ticker,
                     )
                 )
-        baseline = deepcopy(state)
-        self._apply_actions(baseline, trade_date, corporate_actions, decision_cutoff)
         if settle_dividends:
             if trade_date != competition_end or baseline.dividends_settled:
                 raise AccountingError("Deferred dividend settlement only once on competition end")

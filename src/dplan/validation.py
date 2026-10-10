@@ -256,6 +256,30 @@ class DPlanValidator:
                     shares[order["ticker"]] = shares.get(order["ticker"], 0) + order["shares"] * (
                         1 if order["side"] == "BUY" else -1
                     )
+                estimated_nav = estimated_cash + sum(
+                    (
+                        decimal(previous_closes[t]) * count
+                        for t, count in shares.items()
+                        if count > 0
+                    ),
+                    Decimal(0),
+                )
+                if estimated_nav <= 0:
+                    fail("C11_NAV", "Estimated post-cost NAV must be positive")
+                else:
+                    for ticker, count in shares.items():
+                        if count <= 0:
+                            continue
+                        weight = decimal(previous_closes[ticker]) * count / estimated_nav
+                        cap = self.policy.tsmc_cap if ticker == "2330" else self.policy.stock_cap
+                        adding = any(
+                            o["ticker"] == ticker and o["side"] == "BUY" for o in plan["orders"]
+                        )
+                        if weight > cap and adding:
+                            fail(
+                                "C11_POST_COST_CAP",
+                                f"Post-cost estimated weight exceeds cap for an added position: {ticker}",
+                            )
                 if any(value < 0 for value in shares.values()):
                     fail("C13_SELL", "Orders oversell settled inventory")
                 if (

@@ -59,6 +59,8 @@ class AvailabilityPolicy:
                 )
                 continue
             synthetic = row.get("synthetic", False) or row.get("source") == "SYNTHETIC_FIXTURE"
+            if self.mode == "synthetic_fixture" and not synthetic:
+                raise ValueError("Fixture mode requires exclusively labeled synthetic inputs")
             if synthetic and self.mode != "synthetic_fixture":
                 raise ValueError("Synthetic input forbidden outside fixture mode")
             verified = filter_available_data([row], cutoff, strict=True)

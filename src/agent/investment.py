@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 import os
 from uuid import uuid4
+from contextlib import aclosing
+from src.competition.configuration import load_settings
+from src.portfolio.optimizer import PortfolioOptimizer
 
 from google.adk.runners import Runner
 from google.adk.agents.run_config import RunConfig
@@ -26,22 +29,58 @@ INSTRUCTION = """你是 TEAM_11586 玉山競賽的投資決策 Agent，以繁體
 首日全現金須建立20至30檔，不能用全現金 hold 當合規備援。2330上限25%，其餘10%。
 現金不得負且低於NAV25%，留緩衝；每個現有持股必須在 target_weights 與 rationale 中，
 全部賣出填0。無交易時也須逐一提出續抱理由，不能忽略既有持股。
+rationale 的每一個 key 必須是 target_weights 中同一個四位數股票代號；
+禁止使用 default、all 或共用整組理由。每檔 premise_refs 只能引用1至10筆相關觀察，
+market observation_refs 也限1至10筆，不要把三十筆觀察全部塞入一個推論。
+每檔 logic 與 market_logic 至少寫25個中文字，具體連結所引用數據與配置理由。
 提交前用 validate_proposal 檢查；修正需自主確認並在 rationale 說明，不得隱藏更動。
-最後只輸出符合提供之 InvestmentDecision JSON schema 的單一JSON，不加其他文字。
+最後呼叫 submit_investment_decision，將完整 InvestmentDecision JSON 以字串參數提交檢查。
+此工具不執行交易；它只記錄你自主產生的完整決策。若回傳INVALID，按錯誤重新評估。
 model_version 必須填實際模型，strategy_version 必須填 context 提供之版本。
 """
 
 
 def create_investment_agent(
-    context: DecisionContext, model: str | None = None
+    context: DecisionContext, model: str | None = None, submission: dict | None = None
 ) -> ReliableResearchAgent:
     model = model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    settings = load_settings()
     contract = InvestmentDecision.model_json_schema()
+    submission = submission if submission is not None else {}
+
+    def submit_investment_decision(decision_json: str) -> dict:
+        """Validate and record your autonomous JSON decision; never executes trades."""
+        try:
+            proposal = parse_decision(decision_json)
+            if (
+                proposal.trade_date != context.trade_date
+                or proposal.data_cutoff != context.data_cutoff
+                or proposal.model_version != model
+                or proposal.strategy_version != context.strategy_version
+            ):
+                raise ValueError("Use exact context date, cutoff, model and strategy version")
+            observations = {r["obs_id"] for r in context.observations}
+            if not set(proposal.observation_refs) <= observations or any(
+                not set(r.premise_refs) <= observations for r in proposal.rationale.values()
+            ):
+                raise ValueError("Use only actual observation references")
+            submission["decision"] = proposal
+            submission["raw_response"] = redact(decision_json)
+            return {
+                "status": "VALID",
+                "message": "Autonomous proposal recorded; no trades executed",
+            }
+        except (ValueError, TypeError) as error:
+            return {
+                "status": "INVALID",
+                "error_type": type(error).__name__,
+                "details": redact(str(error))[:1500],
+            }
 
     def limit_tools(tool, args, tool_context):
         count = tool_context.state.get("investment_tool_calls", 0) + 1
         tool_context.state["investment_tool_calls"] = count
-        if count > 20:
+        if count > int(settings.agent["max_tool_calls"]):
             raise RuntimeError("Investment tool-call limit exceeded")
         return None
 
@@ -53,7 +92,10 @@ def create_investment_agent(
         + "\n輸出結構："
         + json.dumps(contract, ensure_ascii=False)
         + f"\ntrade_date={context.trade_date}; data_cutoff={context.data_cutoff}; model_version={model}; strategy_version={context.strategy_version}",
-        tools=readonly_tools(context),
+        tools=readonly_tools(
+            context, PortfolioOptimizer(settings.optimizer, settings.policy, settings.costs)
+        )
+        + [submit_investment_decision],
         before_tool_callback=limit_tools,
     )
 
@@ -76,7 +118,8 @@ async def run_investment_decision(
     if not os.getenv("GOOGLE_API_KEY") or os.getenv("GOOGLE_API_KEY") == "YOUR_API_KEY_HERE":
         trace.update(status="SKIPPED", error_type="MissingAPIKey", run_completed_at=now_iso())
         return None, trace
-    agent = create_investment_agent(context, model)
+    submission = {}
+    agent = create_investment_agent(context, model, submission)
     trace["model_version"] = str(agent.model)
     sessions = InMemorySessionService()
     session_id = uuid4().hex
@@ -91,38 +134,44 @@ async def run_investment_decision(
         )
     final = ""
     try:
-        async for event in runner.run_async(
-            user_id="local",
-            session_id=session_id,
-            new_message=types.Content(role="user", parts=[types.Part(text=text)]),
-            run_config=RunConfig(max_llm_calls=8),
-        ):
-            usage = getattr(event, "usage_metadata", None)
-            if usage:
-                trace["model_events"].append(usage.model_dump(exclude_none=True))
-            for part in event.content.parts or [] if event.content else []:
-                if part.function_call:
-                    trace["tool_calls"].append(
-                        {
-                            "name": part.function_call.name,
-                            "args": part.function_call.args,
-                            "timestamp": now_iso(),
-                        }
+        async with aclosing(
+            runner.run_async(
+                user_id="local",
+                session_id=session_id,
+                new_message=types.Content(role="user", parts=[types.Part(text=text)]),
+                run_config=RunConfig(max_llm_calls=8),
+            )
+        ) as stream:
+            async for event in stream:
+                usage = getattr(event, "usage_metadata", None)
+                if usage:
+                    trace["model_events"].append(usage.model_dump(exclude_none=True))
+                for part in event.content.parts or [] if event.content else []:
+                    if part.function_call:
+                        trace["tool_calls"].append(
+                            {
+                                "name": part.function_call.name,
+                                "args": part.function_call.args,
+                                "timestamp": now_iso(),
+                            }
+                        )
+                    if part.function_response:
+                        trace["tool_results"].append(
+                            {
+                                "name": part.function_response.name,
+                                "response": part.function_response.response,
+                                "timestamp": now_iso(),
+                            }
+                        )
+                if event.is_final_response() and event.content:
+                    final = "".join(
+                        part.text or "" for part in event.content.parts or [] if not part.thought
                     )
-                if part.function_response:
-                    trace["tool_results"].append(
-                        {
-                            "name": part.function_response.name,
-                            "response": part.function_response.response,
-                            "timestamp": now_iso(),
-                        }
-                    )
-            if event.is_final_response() and event.content:
-                final = "".join(
-                    part.text or "" for part in event.content.parts or [] if not part.thought
-                )
+                if submission.get("decision") is not None:
+                    final = submission["raw_response"]
+                    break
         trace["raw_response"] = redact(final)
-        decision = parse_decision(final)
+        decision = submission.get("decision") or parse_decision(final)
         called = {item["name"] for item in trace["tool_calls"]}
         if (
             not {

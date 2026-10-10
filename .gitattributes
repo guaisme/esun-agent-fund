@@ -1,0 +1,2 @@
+# Preserve organizer-provided JSON/Markdown bytes for SHA256 evidence.
+docs/official/* -text

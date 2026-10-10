@@ -19,3 +19,14 @@ docs/official/*.pdf
 docs/official/*.docx
 outputs/
 config/local*.yaml
+
+# Live evidence and investment drafts remain local; publish aggregate summaries only.
+reports/*live*trace*.json
+reports/*research_e2e*.json
+reports/DRAFT*.json
+reports/strategy_declaration_trace.json
+
+# Derived financial evidence and generated strategy artifacts are local only.
+reports/phase3_7*
+reports/strategy_document_audit.json
+config/strategy_declaration.json

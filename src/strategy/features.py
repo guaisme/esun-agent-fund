@@ -113,16 +113,35 @@ class FeatureEngine:
                 r.get("price_unit") != "TWD/share" or r.get("volume_unit") != "shares" for r in rows
             ):
                 raise ValueError("Feature inputs require TWD/share and volume in shares")
+            expected_previous = max(
+                (d for d in trading_days or set() if d < cutoff[:10]), default=None
+            )
+            stale = expected_previous is not None and (
+                not rows or rows[-1]["observation_date"] != expected_previous
+            )
+            if stale:
+                input_issues.append(
+                    {
+                        "severity": "WARNING",
+                        "ticker": ticker,
+                        "code": "stale_latest_session",
+                        "expected": expected_previous,
+                    }
+                )
             factors: dict[str, float | None] = {}
             # Preserve null closes: a missing session invalidates a lookback;
             # dropping it would turn a 20-session window into an arbitrary span.
             for horizon in self.calculator.HORIZONS:
                 window = rows[-horizon - 1 :]
-                valid = len(window) == horizon + 1 and all(
-                    isinstance(r.get("close"), (int, float))
-                    and isfinite(r["close"])
-                    and r["close"] > 0
-                    for r in window
+                valid = (
+                    not stale
+                    and len(window) == horizon + 1
+                    and all(
+                        isinstance(r.get("close"), (int, float))
+                        and isfinite(r["close"])
+                        and r["close"] > 0
+                        for r in window
+                    )
                 )
                 if trading_days and window:
                     expected = sorted(
@@ -157,8 +176,10 @@ class FeatureEngine:
                 }
                 flow_window = [by_day.get(r["observation_date"]) for r in rows[-horizon:]]
                 denominators = rows[-horizon:]
-                volume_ok = len(denominators) == horizon and all(
-                    type(r.get("volume")) is int and r["volume"] > 0 for r in denominators
+                volume_ok = (
+                    not stale
+                    and len(denominators) == horizon
+                    and all(type(r.get("volume")) is int and r["volume"] > 0 for r in denominators)
                 )
                 if trading_days and denominators:
                     expected_flow_days = sorted(
