@@ -10,12 +10,12 @@
 ```powershell
 git clone https://github.com/guaisme/esun-agent-fund.git
 cd esun-agent-fund
-git switch codex/research-agent-phase1
+git switch feature/phase2-market-data
 conda create -n esun-agent-fund python=3.11 -y
 conda activate esun-agent-fund
 python --version
 python -m pip install -r requirements.txt
-Copy-Item research_agent/.env.example research_agent/.env
+if (-not (Test-Path research_agent/.env)) { Copy-Item research_agent/.env.example research_agent/.env }
 notepad research_agent/.env
 ```
 
@@ -55,6 +55,8 @@ adk web
 | mcp | 2.3.0 | 官方 MCP Python SDK |
 | python-dotenv | 1.2.4 | 讀取 agent 旁的 `.env` |
 | pytest | 9.1.1 | 測試 |
+| requests | 2.34.2 | 官方歷史 API 的依序 HTTP client |
+| pyarrow | 26.0.0 | Parquet 讀寫 |
 
 Gemini client 與 MCP Python SDK 亦固定為已驗證版本，其他間接依賴由套件相依規則解析。非同步測試使用 Python asyncio.run，不需要額外 pytest plugin。
 
@@ -72,8 +74,7 @@ README.md
 
 使用 [ToAlpha 官方文件](https://toalpha.tw/mcp-docs) 與 [ADK 官方 MCP 文件](https://adk.dev/tools-custom/mcp-tools/)。
 連線是 `StreamableHTTPConnectionParams`，HTTP timeout 15 秒、SSE read timeout 30 秒；工具探索整體最多 45 秒。
-Gemini 每次 HTTP 請求 timeout 60 秒（SDK 單位為毫秒），attempts=1，不自動重試該請求。
-這是每個請求的逾時，並非整輪研究總時限；網路傳輸持續有進度時總時間仍可能較長。
+Gemini 每次請求預設 60 秒，SDK attempts=1；Phase 2 應用層最多重試三次，整輪研究預設 240 秒總時限。
 終端會顯示 `Gemini request start` 與 `Gemini response received`，方便區分模型等待與 MCP 等待。
 僅暴露以下五個工具；schema 從服務即時取得，不在程式手動重建：
 
@@ -96,7 +97,7 @@ Agent 自主規劃工具：先確認資料更新狀態，個股先解析名稱�
 
 回答需列資料來源、連結、日期和單位，區分客觀事實與推論。沒有資料不能補值。
 程式保守拒絕包含未來 ISO 月／日期的整份工具結果；季別、公告可知時間及指定歷史截止日期另由研究指示檢查。
-此階段不是 point-in-time 資料系統，無法證明歷史可知時間的資料不能用作無前視偏誤研究。
+ToAlpha 研究工具不保證歷史可知時間；Phase 2 本地資料層另外實作 point-in-time 過濾，不能混用。
 
 ## 測試
 
@@ -133,7 +134,7 @@ Remove-Item Env:RUN_TOALPHA_INTEGRATION
 成功需在 ADK event trace 中看到真正 function_call 及對應 function_response，終端也需看到 `MCP call tool=...` 和 `MCP result ... status=received`。
 問題一必須看到 monthly_revenue，問題二 market_overview，問題三 institutional_flows；另檢查來源、資料日期、單位與繁體中文。
 只有模型文字回答，或只呼叫 resolve_stock/data_status，不算完成研究驗收。
-金鑰不在 repository，這項端到端驗收必須在本機執行，不能宣稱已完成。
+金鑰不在 repository；Phase 2 已新增可選的自動 Live E2E，實際結果見 reports/phase2_acceptance.md。
 
 ## 常見錯誤
 
@@ -151,11 +152,11 @@ Remove-Item Env:RUN_TOALPHA_INTEGRATION
 | 本輪未取得資料 | 查看 event trace：模型是否實際呼叫資料工具、是否錯誤或空資料 |
 | 未來日期被拒絕 | 檢查供應商日期與本機時鐘；不以拒絕結果作數值結論 |
 
-## 下一階段
+## 第一階段原訂後續方向
 
 本階段驗收後，再規劃帶公告時間的資料品質檢查與研究評估集；ETF 研究擴充、策略、回測與組合功能須另外定義範圍，本次沒有實作。
 
-## 本次實際驗證（2026-10-11，台北時間）
+## 第一階段驗證歷史（保留紀錄；Phase 2 結果以驗收報告為準）
 
 環境：Windows、既有 Conda `esun-agent`、Python 3.11.17。沒有修改 Conda 全域設定。
 
@@ -175,3 +176,166 @@ Remove-Item Env:RUN_TOALPHA_INTEGRATION
 即時營收回應期別為 2026-09，市場及法人資料日期為 2026-10-08；只代表供應商這次實際回應，沒有獨立重新核算金融數值。
 ADK/MCP 套件有 experimental／deprecation warnings，測試未失敗。這些不等於 Gemini 端到端驗收已完成。
 CLI 啟動確認之外，瀏覽器 localhost 存取仍需使用者本機驗證；執行環境跨命令的 loopback 請求逾時，因此用同程序 TestClient 驗證 HTTP 路由。
+
+
+## Phase 2：資料基礎設施與 Agent 可靠性
+
+新增模組獨立於 `research_agent`，不替換已運作的 Agent。資料下載無須 Gemini、MCP 或 Codex CLI；不含策略、因子、交易、回測引擎、配置最佳化及 D-Plan 生成。Phase 2 分支以尚未合併的第一階段分支為基底；先合併第一階段 PR，再合併第二階段 PR。
+
+```text
+config/
+  universe.csv                  # 官方 PDF 的 150 檔，非 API 動態名單
+  universe_manifest.json        # 官方 PDF SHA256、頁數與核對名單
+src/data/
+  universe.py                   # UniverseLoader：100 TWSE + 50 TPEx
+  providers/
+    base.py                     # BaseProvider 與單位、來源正規化
+    twse.py                     # 官方全市場每日行情與三大法人
+    tpex.py                     # 官方全市場每日行情與三大法人
+    finmind.py                  # 明確啟用後的行情備援、月營收
+    institutional.py            # InstitutionalFlowProvider
+  http.py                       # 依序請求、限速、重試、原始 JSON 封存
+  storage.py                    # SQLite catalog + immutable Parquet
+  time_safety.py                # 含時區的 point-in-time 過濾
+  quality.py                    # ERROR / WARNING / INFO 報告
+  download.py                   # 批次下載、續傳、檢查點
+  cli.py                        # python -m src.data.cli
+research_agent/reliability.py   # Gemini/MCP timeout、重試、整輪 deadline
+pytest.ini
+tests/test_data.py              # 離線，MOCK 資料只在 pytest 暫存目錄
+tests/test_live.py              # opt-in Integration / Live E2E
+reports/phase2_acceptance.md     # 實際驗收、未完成事項
+```
+
+### 官方股票名單
+
+來源為使用者提供的 `玉山挑戰賽_投資組合及交易標的_150檔清單_v1.pdf`，已抽取並逐頁核對三頁。CSV 必須符合 manifest 的代號、名稱、市場，不以當下 API 股票名單改寫官方名單。更新官方文件時須重新核對、更新 manifest；SHA256 是來源追溯值，不是主辦方數位簽章。
+
+```powershell
+python -m src.data.cli universe
+```
+
+`UniverseLoader` 提供 `load_universe()`、`get_all_tickers()`、`get_twse_tickers()`、`get_tpex_tickers()`、`is_valid_ticker(ticker)`、`get_stock_info(ticker)`。總數、市場數、四位數字、重複、名稱空白及官方名單差異皆拋出 `UniverseError`。官方 PDF 沒有提交到 Git；名單來源紀錄在 manifest。
+
+### Provider、單位與來源
+
+| 資料 | API 與參數 | 實際格式／單位 |
+| --- | --- | --- |
+| TWSE 每日行情 | `https://www.twse.com.tw/exchangeReport/MI_INDEX`，`date=YYYYMMDD&type=ALLBUT0999&response=json` | 在 tables 中依欄名選「證券代號／開盤價」表；成交股數為股，成交金額為元 |
+| TPEx 每日行情 | `https://www.tpex.org.tw/www/zh-tw/afterTrading/dailyQuotes`，`date=YYYY/MM/DD&id=&response=json` | tables[0]；成交股數為股，成交金額(元)為元；另保留官方均價 |
+| TWSE 法人 | `https://www.twse.com.tw/fund/T86`，`date=YYYYMMDD&selectType=ALLBUT0999&response=json` | fields/data；買賣超股數；外資欄排除外資自營商 |
+| TPEx 法人 | `https://www.tpex.org.tw/www/zh-tw/insti/dailyTrade`，`date=YYYY/MM/DD&type=Daily&response=json` | 24 欄，七組買／賣／淨股數；外資不含外資自營商、投信、自營商合計分別取第 5／14／23 欄（1 起算） |
+| FinMind 行情 | `https://api.finmindtrade.com/api/v4/data`，dataset=`TaiwanStockPrice` | Trading_Volume=股，Trading_money=元；Trading_turnover 是成交筆數，不能當成交金額 |
+| FinMind 月營收 | 同上，dataset=`TaiwanStockMonthRevenue` | revenue=元；revenue_year/month 為期別；date/create_time 不能當實際公布時間 |
+
+以實際 API 欄名、資料日期與列寬檢查 schema。TPEx 法人回應欄名有重複，分組位置依現行官方結構，尚未建立跨版本 header group 自動辨識；schema 變動須再核對官方頁面，不宜只依 HTTP 200 判斷。
+
+這版批次行情用「每日期、每市場一筆請求」，不逐一重抓 150 檔。未使用 TPEx 月行情的「張／仟元」欄位，避免其四捨五入股數影響 VWAP。`vwap = turnover_TWD / volume_shares`，標記計算方法；`provider_average` 另外保存。兩者尚未核對主辦方的成交均價公式，不能直接當競賽成交價；未用 adjusted_close 替代價格。
+
+TWSE/TPEx 原始資料取得優先。只有 `$env:FINMIND_ENABLED = "1"` 才能啟用 FinMind，token 使用 Authorization header，不保存到 raw JSON。下載 CLI 不讀取研究 Agent 的 `.env`，請在 PowerShell 設定 FinMind 環境變數。未啟用時，所有來源失敗便記錄失敗，不填股價。法人僅用官方資料；月營收目前僅實作 FinMind adapter。來源授權、商業／競賽再利用與 API 額度須按供應商當下條款確認，沒有授權豁免。
+
+參考：[TWSE 歷史行情](https://www.twse.com.tw/zh/trading/historical/stock-day.html)、[TPEx 行情](https://www.tpex.org.tw/zh-tw/mainboard/trading/info/stock-pricing.html)、[FinMind 資料目錄](https://finmind.github.io/tutor/TaiwanMarket/DataList/)、[FinMind 月營收](https://finmind.github.io/tutor/TaiwanMarket/Fundamental/)、[ToAlpha 文件](https://toalpha.tw/mcp-docs)。ToAlpha 只供研究工具使用，不作批量歷史匯出來源。
+
+### Windows PowerShell 操作
+
+已有 `esun-agent` 環境可直接執行，不必重建：
+
+```powershell
+conda activate esun-agent
+cd C:\Users\User\esun-agent-fund\esun-agent-fund  # 換成你自己的 repository 路徑
+ git fetch origin
+ git switch feature/phase2-market-data
+python -m pip install -r requirements.txt
+python -m src.data.cli universe
+
+# 指定單股；只允許官方 CSV 股票
+python -m src.data.cli download --ticker 2330 --start 2026-03-01 --end 2026-10-08
+
+# 省略 ticker 即官方 150 檔；按相同區間重跑即可續傳
+python -m src.data.cli download --start 2026-03-01 --end 2026-10-08 --output data/metadata/download-result.json
+
+# 更新新日期；--refresh 才重新請求已封存的同日期資料
+python -m src.data.cli download --start 2026-10-08 --end 2026-10-09 --refresh
+
+# 法人：預設同樣支援全部 150 檔；亦可 --ticker 2454
+python -m src.data.cli flows --ticker 2454 --start 2026-09-28 --end 2026-10-08
+
+# 確認 FinMind 授權／額度後才啟用；token 若需要請自行設定，勿貼日誌
+$env:FINMIND_ENABLED = "1"
+python -m src.data.cli revenue --ticker 2330 --start 2026-01-01 --end 2026-10-08
+Remove-Item Env:FINMIND_ENABLED
+
+# 查詢本地 SQLite catalog 指向的 Parquet
+python -m src.data.cli query --ticker 2330 --start 2026-09-01 --end 2026-09-30 --output data/metadata/2330-query.json
+python -m src.data.cli query --dataset flows --ticker 2454 --start 2026-09-28 --end 2026-10-08
+python -m src.data.cli query --ticker 2330 --as-of "2025-03-10T08:30:00+08:00"
+
+# 資料品質；完整報告保存本機（大量內容不提交 Git）
+python -m src.data.cli quality --start 2026-03-01 --end 2026-10-08 --min-days 120 --output data/metadata/quality-prices.json
+python -m src.data.cli quality --dataset flows --start 2026-09-28 --end 2026-10-08 --min-days 5 --output data/metadata/quality-flows.json
+python -m src.data.cli quality --dataset revenue --min-days 1 --output data/metadata/quality-revenue.json
+```
+
+下載 `--start/--end` 以 ISO 日期提供，不接受未來日期。預設間隔 2 秒、timeout 20 秒、最多重試 3 次（含首次共 4 次），可用 `--interval`、`--timeout`、`--max-retries` 調整，請遵守來源限速；沒有大量平行請求。401/403/schema 錯誤不無限重試。API 429/5xx/網路 timeout 使用 exponential backoff + jitter，會記錄類型與狀態碼，不記敏感 exception 內容。退出碼：0=操作無已偵測錯誤；1=設定／來源錯誤；2=已記錄下載失敗、品質錯誤或不完整品質報告；0 不代表所有金融資料已獨立驗收。
+
+`Copy-Item` 僅適用 PowerShell。若 Anaconda Prompt 顯示 `(esun-agent) C:\...>`，通常是 cmd：請用 `copy research_agent\.env.example research_agent\.env`，且不要覆寫已設定金鑰的檔案。
+
+### SQLite / Parquet 與增量更新
+
+預設 `data/raw/` 保存原始 JSON envelope（URL、公開參數、fetched_at、immutable snapshot）；`data/processed/{prices,flows,revenue}/` 保存不可變 Parquet chunk；`data/metadata/catalog.sqlite` 保存官方名單、來源、timestamp、revision 指紋、更新檢查點、觀察到的市場交易日與失敗紀錄。三個目錄、`.env`、SQLite、Parquet 已列入 `.gitignore`，不提交大量金融資料。
+
+相同 dataset/ticker/observation/content 指紋不重複儲存；修改數值會另建 revision，原紀錄保留。查詢預設取最新 revision。先做 PIT 過濾再選 revision，避免未來修訂覆蓋歷史版本。SQLite transaction 序列化 Parquet 寫入；chunk 原子發布後才 commit catalog。中斷可能留下未入 catalog 的孤立 chunk，查詢不會讀取；重跑可恢復。不要手動刪除 catalog 指向的 Parquet；暫不提供壓縮／清理工具或多程序大量併發下載。
+
+完整市場日檢查點可跳過；單股下載不會冒充全市場完成。空 API 回應只是 `empty_unverified`，不是已驗證休市；下次欲確認供應商更新必須 `--refresh`。原始回應預設長期 cache，重跑不會重新下載相同資料；同一進程也只抓一次同樣的日市場。若股價停牌／無成交／上市較晚造成缺日，報告列出缺漏，不自動補前值或零。
+
+### Point-in-time 與資料品質
+
+* `observation_date`：行情／法人交易日、月營收所屬月份月底；只是觀察期別，不是可用日期。
+* `published_at`：只有來源能證實實際公布時間才填入，現行 adapters 保留 null。
+* `available_at`：此版以首次實際保存 snapshot 的 fetched_at 作「此系統已知時間」，basis=`first_observed_snapshot`；不是宣稱當年收盤後立即可用。
+* `fetched_at`：含 `+08:00` 的實際抓取時間；raw cache 保留原抓取時間，不改寫成此次讀 cache 的時間。
+
+`filter_available_data(rows, as_of_datetime, strict=True)` 要求有時區、資料觀察日不晚於截止日、可用時間不晚於截止時間且 availability_verified。這版不能以今天下載的歷史資料重建去年的已知資訊，因此嚴格歷史 query 多數返回空資料是預期行為。月營收 FinMind `date` 是期別標記，`create_time` 是資料建立時間，不是可驗證公告時間；`published_at=null`、`strict_historical_backtest_eligible=false`、YoY/MoM 無來源則 null，不猜數值。資料在本系統首次抓到以後可作當時已觀察資料，但不因此取得嚴格「原公告當時」回測資格。
+
+品質檢查含官方 ticker、日期／時區、未來日期、重複、必要欄位、非有限值、負數、OHLC 範圍、股/元單位、無成交／缺價格、未知公告時間、已觀察市場日的個股缺漏、下載失敗與未驗證休市。ERROR 拒絕寫入下載結果；WARNING 不補值；INFO 記錄無成交與未知原公告時間。停牌、除權息／分割不一律判為價格錯誤；尚未接 corporate actions／官方完整休市與停牌表，所以不能宣稱每個缺日都已釐清。coverage 的分母只有「已觀察到資料的市場日」，不是完整官方行事曆，報告另列 empty_unverified／partial／failed。
+
+### Gemini / MCP 的有限重試
+
+`.env.example` 新增以下設定：
+
+| 變數 | 預設 | 用途 |
+| --- | --- | --- |
+| AGENT_MAX_RETRIES | 3 | 每個尚未輸出內容的 Gemini 請求／唯讀 MCP 工具，最多重試三次 |
+| AGENT_INITIAL_BACKOFF | 2 | 秒，指數退避起點 |
+| AGENT_MAX_BACKOFF | 15 | 秒，退避上限；每次均加入 jitter |
+| GEMINI_REQUEST_TIMEOUT | 60 | 秒，async request 與 SDK HTTP timeout |
+| MCP_TOOL_TIMEOUT | 30 | 秒，單次 MCP 工具上限 |
+| AGENT_TASK_DEADLINE | 240 | 秒，整輪研究含探索、API、工具、退避 |
+
+Gemini SDK `HttpRetryOptions(attempts=1)`，應用層擁有重試；429、503 等暫時錯誤／網路 timeout 可重試，400/401/403/404 不重試。已輸出 streaming fragment／function_call 後不重播模型請求，避免重複工具呼叫。MCP 只暴露五個唯讀工具；ADK 2.11 自帶「建立 session／工具探索」的一次重連，探索不再疊加應用層 retry；實際 tool call 最多四次且受整輪 deadline 約束。上限不保證 Google／ToAlpha 服務成功，若耗盡則明確失敗，不以生成內容替代資料。這版擴充 ADK canonical_model 與 run hook，已固定 SDK 版本，升級時需重跑測試。
+
+### Unit / Integration / Live E2E
+
+```powershell
+# 預設離線：不耗 Gemini 或 ToAlpha 額度；網路測試 SKIPPED
+python -m pytest -q
+
+# 真實 TWSE/TPEx 行情與法人 schema；無 Gemini 金鑰
+$env:RUN_DATA_INTEGRATION = "1"
+python -m pytest tests/test_live.py -m integration -q
+Remove-Item Env:RUN_DATA_INTEGRATION
+
+# 真實 Gemini -> Agent -> MCP；明確啟用才消耗 API 額度
+# 先設定 research_agent/.env；Agent 載入 dotenv，金鑰缺少則 SKIPPED
+$env:RUN_LIVE_E2E = "1"
+python -m pytest tests/test_live.py -m live_e2e -q
+Remove-Item Env:RUN_LIVE_E2E
+```
+
+Live E2E 以獨立 InMemory session 查三題，檢查 Gemini 真的產生 required function_call、MCP 有帶日期的財務 payload、最終中文、日期與來源；回應存在 `data/metadata/live-e2e/*.json`（gitignored）。自動檢查不等於全面查核每個數字、繁體用字與五日明細；須人工比較 response 與最終回答。錯誤／配額不足會 FAIL，不把錯誤提示當成功。三題整體仍須全部驗收，詳見驗收報告。
+
+若 Windows 管控環境 pytest tmp_path 出現 PermissionError，可指定 repository 外的可寫暫存目錄：`python -m pytest -q --basetemp C:\your\writable\pytest-phase2`。這個目錄只能放測試資料，不放正式行情。
+
+### 已知限制與下一階段
+
+目前原公告時間、完整交易日／停牌原因、調整價／corporate actions 與競賽成交均價定義尚未驗收；150 檔未必都已有 120 日上市／上櫃歷史。這些需要官方來源證據，不能從缺漏推定。月營收目前為明確 opt-in FinMind；批量法人及營收長歷史尚需受供應商額度分批驗收。下一階段應先補資料可用時間證據、完整 calendar／corporate actions 與三題 E2E 全通過，再考慮有測試覆蓋的因子和 D-Plan validator；本次沒有實作那些功能。
