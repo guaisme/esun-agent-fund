@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime
+from .active_share import ActiveShareCalculator, BenchmarkHoldings
+from .diagnostics import sector_concentration_diagnostics
+
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_FLOOR, localcontext
 
@@ -26,6 +30,9 @@ class OptimizerConfig:
     buy_stress: Decimal = Decimal("0.05")
     sell_stress: Decimal = Decimal("0.05")
     max_repairs: int = 12
+    active_share_safety_threshold: Decimal = Decimal("0.25")
+    sector_warning_threshold: Decimal = Decimal("0.35")
+    benchmark_max_age_days: int = 7
 
     def __post_init__(self) -> None:
         for name in (
@@ -35,6 +42,8 @@ class OptimizerConfig:
             "cost_penalty",
             "buy_stress",
             "sell_stress",
+            "active_share_safety_threshold",
+            "sector_warning_threshold",
         ):
             object.__setattr__(self, name, decimal(getattr(self, name)))
         if (
@@ -46,6 +55,10 @@ class OptimizerConfig:
             or not 0 <= self.buy_stress < 1
             or not 0 <= self.sell_stress < 1
             or not 1 <= self.max_repairs <= 50
+            or not Decimal("0.20") <= self.active_share_safety_threshold <= 1
+            or not 0 < self.sector_warning_threshold <= 1
+            or type(self.benchmark_max_age_days) is not int
+            or self.benchmark_max_age_days < 0
         ):
             raise AccountingError("Invalid optimizer configuration")
 
@@ -91,6 +104,13 @@ class PortfolioOptimizer:
         regime: str,
         proposed_targets: dict[str, Decimal] | None = None,
         cash_range: tuple[Decimal, Decimal] | None = None,
+        benchmark_snapshots: list[BenchmarkHoldings] | None = None,
+        benchmark_cutoff: datetime | None = None,
+        active_share_method: str = "raw",
+        active_share_method_confirmed: bool = False,
+        sector_memberships: dict[str, dict] | None = None,
+        sector_warning_threshold: Decimal | None = None,
+        fixture: bool = False,
     ) -> OptimizationResult:
         previous_nav = decimal(previous_nav)
         if previous_nav <= 0 or regime not in {"risk_on", "neutral", "risk_off"}:
@@ -114,7 +134,9 @@ class PortfolioOptimizer:
             if ticker in scores or not self.universe.is_valid_ticker(ticker):
                 raise AccountingError("Duplicate or unsupported ranking ticker")
             scores[ticker] = decimal(str(row["score"]))
-        if len(scores) < self.config.holdings or set(state.positions) - set(previous_closes):
+        if len(scores) < self.config.holdings or set(state.positions) - set(
+            previous_closes
+        ):
             return OptimizationResult(
                 "BLOCKED",
                 {},
@@ -128,17 +150,28 @@ class PortfolioOptimizer:
         # Keep an existing eligible holding unless the new name clears both
         # a configured alpha hurdle and a round-trip transaction-cost penalty.
         if state.initialized and proposed_targets is None:
-            outsiders = [t for t in state.positions if t in scores and t not in selected]
+            outsiders = [
+                t for t in state.positions if t in scores and t not in selected
+            ]
             entrants = [t for t in reversed(selected) if t not in state.positions]
-            for old, new in zip(sorted(outsiders, key=lambda t: (-scores[t], t)), entrants):
+            for old, new in zip(
+                sorted(outsiders, key=lambda t: (-scores[t], t)), entrants
+            ):
                 cost_hurdle = self.config.cost_penalty * (
                     self.costs.commission_rate * 2 + self.costs.sell_tax_rate
                 )
-                if scores[new] - scores[old] < self.config.minimum_alpha_advantage + cost_hurdle:
+                if (
+                    scores[new] - scores[old]
+                    < self.config.minimum_alpha_advantage + cost_hurdle
+                ):
                     selected.remove(new)
                     selected.append(old)
                     modifications.append(
-                        {"type": "cost_hysteresis", "retained": old, "rejected_replacement": new}
+                        {
+                            "type": "cost_hysteresis",
+                            "retained": old,
+                            "rejected_replacement": new,
+                        }
                     )
         if state.initialized and proposed_targets is None:
             # Budget new-name replacements before equal-weight allocation.
@@ -147,7 +180,8 @@ class PortfolioOptimizer:
             per_replacement = Decimal(2) * (1 - cash_target) / self.config.holdings
             allowed_replacements = int(self.config.turnover_cap / per_replacement)
             entrants = sorted(
-                (t for t in selected if t not in state.positions), key=lambda t: (scores[t], t)
+                (t for t in selected if t not in state.positions),
+                key=lambda t: (scores[t], t),
             )
             retainable = sorted(
                 (t for t in state.positions if t in scores and t not in selected),
@@ -158,7 +192,11 @@ class PortfolioOptimizer:
                 selected.remove(new)
                 selected.append(old)
                 modifications.append(
-                    {"type": "turnover_hysteresis", "retained": old, "rejected_replacement": new}
+                    {
+                        "type": "turnover_hysteresis",
+                        "retained": old,
+                        "rejected_replacement": new,
+                    }
                 )
         with localcontext() as context:
             context.prec = 50
@@ -166,22 +204,33 @@ class PortfolioOptimizer:
                 targets = {t: decimal(w) for t, w in proposed_targets.items()}
                 if not set(state.positions) <= set(targets):
                     return OptimizationResult(
-                        "BLOCKED", {}, (), {"reason": "Agent omitted existing holdings"}, ()
+                        "BLOCKED",
+                        {},
+                        (),
+                        {"reason": "Agent omitted existing holdings"},
+                        (),
                     )
                 if set(targets) - (set(scores) | set(state.positions)):
                     return OptimizationResult(
                         "BLOCKED",
                         {},
                         (),
-                        {"reason": "Agent selected a stock outside its approved candidates"},
+                        {
+                            "reason": "Agent selected a stock outside its approved candidates"
+                        },
                         (),
                     )
             else:
                 allocation = (1 - cash_target) / self.config.holdings
                 targets = {t: allocation for t in selected}
-                targets.update({t: Decimal(0) for t in state.positions if t not in selected})
+                targets.update(
+                    {t: Decimal(0) for t in state.positions if t not in selected}
+                )
             for ticker in list(targets):
-                if not self.universe.is_valid_ticker(ticker) or ticker not in previous_closes:
+                if (
+                    not self.universe.is_valid_ticker(ticker)
+                    or ticker not in previous_closes
+                ):
                     return OptimizationResult(
                         "BLOCKED",
                         {},
@@ -231,23 +280,39 @@ class PortfolioOptimizer:
             for attempt in range(self.config.max_repairs + 1):
                 try:
                     orders = derive_orders(
-                        targets, state, previous_nav, previous_closes, policy=self.policy
+                        targets,
+                        state,
+                        previous_nav,
+                        previous_closes,
+                        policy=self.policy,
                     )
                 except AccountingError as exc:
                     return OptimizationResult(
-                        "BLOCKED", targets, (), {"reason": str(exc)}, tuple(modifications)
+                        "BLOCKED",
+                        targets,
+                        (),
+                        {"reason": str(exc)},
+                        tuple(modifications),
                     )
-                diagnostics = self.estimate(orders, state, previous_nav, previous_closes)
+                diagnostics = self.estimate(
+                    orders, state, previous_nav, previous_closes
+                )
                 count = diagnostics["holdings"]
                 if count < self.policy.min_holdings or count > self.policy.max_holdings:
                     return OptimizationResult(
                         "BLOCKED",
                         targets,
                         tuple(orders),
-                        {**diagnostics, "reason": "Lot rounding violates holding count"},
+                        {
+                            **diagnostics,
+                            "reason": "Lot rounding violates holding count",
+                        },
                         tuple(modifications),
                     )
-                if state.initialized and diagnostics["gross_turnover"] > self.config.turnover_cap:
+                if (
+                    state.initialized
+                    and diagnostics["gross_turnover"] > self.config.turnover_cap
+                ):
                     return OptimizationResult(
                         "BLOCKED",
                         targets,
@@ -266,7 +331,10 @@ class PortfolioOptimizer:
                         "BLOCKED",
                         targets,
                         tuple(orders),
-                        {**diagnostics, "reason": "Too much cash after lot/cost estimation"},
+                        {
+                            **diagnostics,
+                            "reason": "Too much cash after lot/cost estimation",
+                        },
                         tuple(modifications),
                     )
                 overweight = [
@@ -286,6 +354,61 @@ class PortfolioOptimizer:
                         },
                         tuple(modifications),
                     )
+                diagnostics["active_share"] = {
+                    "status": "BLOCKED",
+                    "reason": "All official benchmark snapshots and cutoff required",
+                }
+                diagnostics["sector_concentration"] = {
+                    "data_completeness": "UNVERIFIED",
+                    "reason": "Verified PIT sector classifications and cutoff required",
+                }
+                if benchmark_cutoff is not None:
+                    diagnostics["sector_concentration"] = (
+                        sector_concentration_diagnostics(
+                            diagnostics["estimated_weights"],
+                            sector_memberships or {},
+                            benchmark_cutoff,
+                            (
+                                sector_warning_threshold
+                                if sector_warning_threshold is not None
+                                else self.config.sector_warning_threshold
+                            ),
+                        )
+                    )
+                if benchmark_snapshots is not None and benchmark_cutoff is not None:
+                    comparison = ActiveShareCalculator().evaluate(
+                        diagnostics["estimated_weights"],
+                        benchmark_snapshots,
+                        benchmark_cutoff,
+                        active_share_method,
+                        method_confirmed=active_share_method_confirmed,
+                        max_age_days=self.config.benchmark_max_age_days,
+                        fixture=fixture,
+                    )
+                    diagnostics["active_share"] = comparison
+                    comparison["internal_safety_threshold"] = (
+                        self.config.active_share_safety_threshold
+                    )
+                    comparison["internal_safety_buffer_met"] = (
+                        comparison["minimum_active_share"] is not None
+                        and comparison["minimum_active_share"]
+                        >= self.config.active_share_safety_threshold
+                    )
+                    if (
+                        comparison["status"] != "EVALUATED"
+                        or comparison["minimum_active_share"]
+                        < self.policy.active_share_min
+                    ):
+                        return OptimizationResult(
+                            "BLOCKED",
+                            targets,
+                            (),
+                            {
+                                **diagnostics,
+                                "reason": "Active Share evidence incomplete, methodology unconfirmed, or legal minimum breached",
+                            },
+                            tuple(modifications),
+                        )
                 if diagnostics["cash_ratio"] >= low and diagnostics["stress_cash"] >= 0:
                     return OptimizationResult(
                         "PROPOSED",
@@ -306,7 +429,10 @@ class PortfolioOptimizer:
                 buys = [o for o in orders if o.side == "BUY" and o.shares > 1000]
                 if not buys:
                     break
-                trim = min(buys, key=lambda o: (scores.get(o.ticker, Decimal("-1E9")), o.ticker))
+                trim = min(
+                    buys,
+                    key=lambda o: (scores.get(o.ticker, Decimal("-1E9")), o.ticker),
+                )
                 current = state.positions.get(trim.ticker)
                 target_shares = (current.shares if current else 0) + trim.shares - 1000
                 revised = (
@@ -352,7 +478,9 @@ class PortfolioOptimizer:
             gross = price * order.shares
             commission, tax = self.costs.fees(gross, order.side)
             stress_gross = gross * (
-                1 + self.config.buy_stress if order.side == "BUY" else 1 - self.config.sell_stress
+                1 + self.config.buy_stress
+                if order.side == "BUY"
+                else 1 - self.config.sell_stress
             )
             stress_commission, stress_tax = self.costs.fees(stress_gross, order.side)
             sign = 1 if order.side == "BUY" else -1
@@ -364,7 +492,9 @@ class PortfolioOptimizer:
             taxes += tax
         if any(value < 0 for value in shares.values()):
             raise AccountingError("Estimated oversell")
-        market_values = {t: value * decimal(closes[t]) for t, value in shares.items() if value}
+        market_values = {
+            t: value * decimal(closes[t]) for t, value in shares.items() if value
+        }
         estimated_nav = cash + sum(market_values.values(), Decimal(0))
         if estimated_nav <= 0:
             raise AccountingError("Non-positive estimated NAV")
@@ -377,5 +507,7 @@ class PortfolioOptimizer:
             "tax": taxes,
             "holdings": len(market_values),
             "estimated_nav": estimated_nav,
-            "estimated_weights": {t: value / estimated_nav for t, value in market_values.items()},
+            "estimated_weights": {
+                t: value / estimated_nav for t, value in market_values.items()
+            },
         }

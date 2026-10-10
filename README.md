@@ -374,6 +374,7 @@ Optimizer 只給出有界檢查/調整建議，修改目標須回到 Agent 重�
 - `config/competition.json`：TEAM_11586、官方限制、費稅、未確認規則旗標。
 - `config/alpha_strategy.yaml`：5日/20日動能、20日波動扣分、縮尾、z-score與缺值規則。
 - `config/optimizer.yaml`：持股數、周轉門檻、不交易區間、成本、5%買賣壓力與修正次數。
+- 同檔可設定 Active Share 內部安全門檻（預設25%）、產業集中警示（35%）及基準持股最大年齡（7日）；法定20%門檻不能由內部設定放寬。
 - `config/data_policy.yaml`：嚴格可得、研究假設、合成測試模式。
 - `config/agent.yaml`：模型及有限重試2秒起、上限15秒、jitter、工具上限與整輪240秒deadline。
 - `config/strategy_declaration.json`：實際 Gemini 生成並完成官方Word範本視覺QA的凍結文字。不同策略版本須重新宣告，不可靜默替換。
@@ -440,3 +441,7 @@ CLI填完Word會回報 VISUAL_QA_REQUIRED，不自行宣稱版面驗收或重新
 2026-10-26官方行事曆休市，競賽期間實際有24交易日、首個交易日10/27；尚未將此差異當成主辦方正式更正。
 無任何真實券商下單、競賽平台上傳、信用交易或自動合併main。不要把改旗標當成完成資料驗證。
 詳細操作、规则、資料假設、策略驗證與Agent設計見 docs 中的專題文件。
+
+`ActiveShareCalculator.evaluate()` 逐一輸出官方30檔ETF的持股時點、可得時間、來源、方法、Active Share及缺漏原因。缺失持股不補零；方法未確認不回報合規通過。Optimizer 有提供結構化基準資料時會檢查，資料不足時仍保留研究提案但正式就緒維持 BLOCKED。
+`ActiveShareValidator.validate()` 使用競賽交易日集合、同日可得基準和前日已驗證計數；跳日、重跑、缺前日證據或拿舊持股判斷新交易日都不能更新正式計數。這項獨立檢查不替代官方結算對帳。
+產業集中度只使用截止前可得、來源明確的分類；未知分類另外列出。產業35%是內部警示，並非主辦方法定限制。

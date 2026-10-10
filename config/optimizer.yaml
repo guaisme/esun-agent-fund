@@ -7,6 +7,9 @@ cost_penalty: '1'
 buy_stress: '0.05'
 sell_stress: '0.05'
 max_repairs: 12
+active_share_safety_threshold: '0.25'
+sector_warning_threshold: '0.35'
+benchmark_max_age_days: 7
 notes:
   - 首日建立部位豁免周轉率上限；此後以買賣總金額除前日 NAV 計算。
   - 修正提案須返回 Agent 確認，不得偷偷改變其投資決策。

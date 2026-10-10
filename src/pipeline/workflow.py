@@ -69,7 +69,8 @@ async def _competition_dry_run(
         write_json(output / f"agent-trace-{revision}.json", trace)
         if decision is None:
             if (
-                trace.get("error_type") in {"ValidationError", "JSONDecodeError", "ValueError"}
+                trace.get("error_type")
+                in {"ValidationError", "JSONDecodeError", "ValueError"}
                 and revision < max_revisions
             ):
                 feedback = [
@@ -96,7 +97,9 @@ async def _competition_dry_run(
             feedback = [
                 {
                     "type": "missing_holdings",
-                    "tickers": sorted(set(context.state.positions) - set(decision.target_weights)),
+                    "tickers": sorted(
+                        set(context.state.positions) - set(decision.target_weights)
+                    ),
                 }
             ]
             continue
@@ -108,8 +111,12 @@ async def _competition_dry_run(
             regime=decision.regime,
             proposed_targets=decision.target_weights,
             cash_range=decision.cash_range,
+            **context.optimizer_evidence_inputs(),
         )
-        if proposal.status != "PROPOSED" or proposal.target_weights != decision.target_weights:
+        if (
+            proposal.status != "PROPOSED"
+            or proposal.target_weights != decision.target_weights
+        ):
             feedback = [
                 {
                     "type": "optimizer_feedback",
@@ -134,7 +141,9 @@ async def _competition_dry_run(
     trace = attempts[-1]
     metadata = {
         "model_provider": (
-            "other" if context.fixture or decision.model_version.startswith("MOCK") else "google"
+            "other"
+            if context.fixture or decision.model_version.startswith("MOCK")
+            else "google"
         ),
         "model_version": decision.model_version,
         "run_started_at": trace["run_started_at"],
@@ -183,7 +192,8 @@ async def _competition_dry_run(
         <= context.trade_date
         <= settings.competition["end_date"],
         "schema_semantics": validation.status == "VALID",
-        "strict_data_mode": context.snapshot.mode == "strict_verified" and not context.fixture,
+        "strict_data_mode": context.snapshot.mode == "strict_verified"
+        and not context.fixture,
         "live_model": trace["status"] == "DECISION_PARSED"
         and metadata["model_provider"] == "google"
         and bool(trace.get("model_events")),
@@ -191,7 +201,9 @@ async def _competition_dry_run(
         "corporate_actions": evidence.corporate_actions_complete,
         "settled_inventory": evidence.inventory_reconciled,
         "active_share": evidence.active_share_passed
-        and settings.policy.active_share_method_confirmed,
+        and settings.policy.active_share_method_confirmed
+        and proposal.diagnostics.get("active_share", {}).get("status") == "EVALUATED"
+        and not proposal.diagnostics["active_share"]["synthetic"],
         "observations": evidence.observations_verified,
         "strategy_declaration": evidence.official_strategy_frozen,
         "fee_rounding": settings.policy.cash_rounding_confirmed,
@@ -200,7 +212,9 @@ async def _competition_dry_run(
     ready = all(gates.values())
     # Invalid schema/semantics are audit artifacts, never competition filenames.
     plan_path = None
-    if validation.schema_valid and not any(i.severity == "HARD_FAIL" for i in validation.issues):
+    if validation.schema_valid and not any(
+        i.severity == "HARD_FAIL" for i in validation.issues
+    ):
         plan_path = write_dplan(output / ("ready" if ready else "draft"), plan)
     else:
         write_json(output / "invalid-dplan-audit.json", plan)

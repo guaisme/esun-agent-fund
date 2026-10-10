@@ -48,11 +48,15 @@ class ComplianceEngine:
             )
         if nav.cash < 0:
             issues.append(
-                ComplianceViolation("negative_cash", "HARD_FAIL", "Cash must not be negative")
+                ComplianceViolation(
+                    "negative_cash", "HARD_FAIL", "Cash must not be negative"
+                )
             )
         if nav.cash_ratio >= self.policy.cash_cap:
             issues.append(
-                ComplianceViolation("cash_cap", "WARNING", "Cash / NAV must be strictly below 25%")
+                ComplianceViolation(
+                    "cash_cap", "WARNING", "Cash / NAV must be strictly below 25%"
+                )
             )
         overweight = {}
         for ticker, weight in nav.weights.items():
@@ -61,7 +65,8 @@ class ComplianceEngine:
                 overweight[ticker] = streak
                 severity = (
                     "WARNING"
-                    if ticker in added_tickers or streak > self.policy.overweight_grace_days
+                    if ticker in added_tickers
+                    or streak > self.policy.overweight_grace_days
                     else "INFO"
                 )
                 issues.append(
@@ -74,6 +79,16 @@ class ComplianceEngine:
                 )
         active_streaks: dict[str, int] = {}
         values = active_shares or {}
+        from .active_share import ActiveETFLoader
+
+        if strict and required_benchmarks != ActiveETFLoader().tickers():
+            issues.append(
+                ComplianceViolation(
+                    "active_share_official_benchmarks",
+                    "UNVERIFIED",
+                    "Production compliance requires all 30 official active ETFs",
+                )
+            )
         if not required_benchmarks or set(values) != required_benchmarks:
             issues.append(
                 ComplianceViolation(
@@ -84,7 +99,11 @@ class ComplianceEngine:
             )
         for benchmark in sorted(required_benchmarks & set(values)):
             value = values[benchmark]
-            if not isinstance(value, Decimal) or not value.is_finite() or not 0 <= value <= 1:
+            if (
+                not isinstance(value, Decimal)
+                or not value.is_finite()
+                or not 0 <= value <= 1
+            ):
                 issues.append(
                     ComplianceViolation(
                         "active_share_value", "HARD_FAIL", "Invalid Active Share value"

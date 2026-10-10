@@ -7,6 +7,8 @@ from decimal import Decimal
 from src.competition.models import PortfolioState
 from src.competition.serialization import json_value
 from src.portfolio.optimizer import PortfolioOptimizer
+from src.portfolio.active_share import BenchmarkHoldings
+from src.data.time_safety import aware
 from src.strategy.features import FeatureSnapshot
 
 
@@ -25,6 +27,8 @@ class DecisionContext:
     benchmark_evidence: dict
     strategy_version: str
     fixture: bool = False
+    benchmark_snapshots: tuple[BenchmarkHoldings, ...] = ()
+    sector_memberships: dict[str, dict] | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -35,8 +39,27 @@ class DecisionContext:
         if self.fixture != (self.snapshot.mode == "synthetic_fixture"):
             raise ValueError("Fixture and availability mode disagree")
 
+    def optimizer_evidence_inputs(self) -> dict:
+        return {
+            "benchmark_snapshots": (
+                list(self.benchmark_snapshots) if self.benchmark_snapshots else None
+            ),
+            "benchmark_cutoff": aware(self.data_cutoff),
+            "active_share_method": self.benchmark_evidence.get(
+                "calculation_method", "raw"
+            ),
+            "active_share_method_confirmed": self.benchmark_evidence.get(
+                "method_confirmed"
+            )
+            is True,
+            "sector_memberships": self.sector_memberships,
+            "fixture": self.fixture,
+        }
 
-def readonly_tools(context: DecisionContext, optimizer: PortfolioOptimizer | None = None) -> list:
+
+def readonly_tools(
+    context: DecisionContext, optimizer: PortfolioOptimizer | None = None
+) -> list:
     """Closures expose a frozen copy of cutoff-filtered inputs, never execution bars.
 
     There is no filesystem/network/SQL interface through which Gemini can query
@@ -91,7 +114,9 @@ def readonly_tools(context: DecisionContext, optimizer: PortfolioOptimizer | Non
         return {
             "ticker": ticker,
             "data_cutoff": context.data_cutoff,
-            "values": {k: v for k, v in features.get("values", {}).items() if "flow_" in k},
+            "values": {
+                k: v for k, v in features.get("values", {}).items() if "flow_" in k
+            },
         }
 
     def get_monthly_revenue(ticker: str) -> dict:
@@ -101,7 +126,9 @@ def readonly_tools(context: DecisionContext, optimizer: PortfolioOptimizer | Non
             "ticker": ticker,
             "data_cutoff": context.data_cutoff,
             "values": {
-                k: v for k, v in features.get("values", {}).items() if k.startswith("revenue_")
+                k: v
+                for k, v in features.get("values", {}).items()
+                if k.startswith("revenue_")
             },
         }
 
@@ -111,13 +138,37 @@ def readonly_tools(context: DecisionContext, optimizer: PortfolioOptimizer | Non
 
     def get_active_etf_holdings() -> dict:
         """Get verified benchmark information, including missing/stale status."""
-        return deepcopy(context.benchmark_evidence)
+        visible, unavailable = [], []
+        for row in context.benchmark_snapshots:
+            try:
+                row.validate(aware(context.data_cutoff), 7, context.fixture)
+                visible.append(json_value(row))
+            except (ValueError, ArithmeticError) as error:
+                unavailable.append(
+                    {
+                        "benchmark_id": row.ticker,
+                        "status": "UNVERIFIED",
+                        "reason": str(error),
+                    }
+                )
+        return {
+            "status": "SNAPSHOTS_AVAILABLE" if visible else "UNVERIFIED",
+            "snapshots": visible,
+            "unavailable": unavailable,
+            "calculation_method": context.benchmark_evidence.get(
+                "calculation_method", "raw"
+            ),
+            "method_confirmed": context.benchmark_evidence.get("method_confirmed")
+            is True,
+        }
 
     def estimate_transaction_cost(target_weights_json: str, regime: str) -> dict:
         """Estimate costs and constraints for target weights; cannot execute trades."""
         import json
 
-        targets = {t: Decimal(str(w)) for t, w in json.loads(target_weights_json).items()}
+        targets = {
+            t: Decimal(str(w)) for t, w in json.loads(target_weights_json).items()
+        }
         result = optimizer.optimize(
             rankings=context.rankings["rankings"],
             state=context.state,
@@ -125,6 +176,7 @@ def readonly_tools(context: DecisionContext, optimizer: PortfolioOptimizer | Non
             previous_closes=context.previous_closes,
             regime=regime,
             proposed_targets=targets,
+            **context.optimizer_evidence_inputs(),
         )
         return json_value(result)
 

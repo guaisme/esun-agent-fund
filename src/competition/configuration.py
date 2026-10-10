@@ -29,7 +29,9 @@ class Settings:
 
 def load_settings(root: Path = ROOT) -> Settings:
     directory = root / "config"
-    competition = json.loads((directory / "competition.json").read_text(encoding="utf-8"))
+    competition = json.loads(
+        (directory / "competition.json").read_text(encoding="utf-8")
+    )
 
     def read(name):
         value = yaml.safe_load((directory / name).read_text(encoding="utf-8"))
@@ -39,7 +41,11 @@ def load_settings(root: Path = ROOT) -> Settings:
 
     def config(cls, value):
         return cls(
-            **{field.name: value[field.name] for field in fields(cls) if field.name in value}
+            **{
+                field.name: value[field.name]
+                for field in fields(cls)
+                if field.name in value
+            }
         )
 
     policy_values = dict(competition)
@@ -65,8 +71,10 @@ def load_settings(root: Path = ROOT) -> Settings:
 def code_fingerprint(root: Path = ROOT) -> dict:
     """Decision-affecting source/config/prompt content, never credentials or data."""
     try:
-        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
-    except (OSError, subprocess.CalledProcessError):
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True, timeout=3
+        ).strip()
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         commit = "unknown"
     paths = sorted(
         {
@@ -85,7 +93,9 @@ def code_fingerprint(root: Path = ROOT) -> dict:
         if path.is_file() and not path.name.startswith("local")
     }
     digest = hashlib.sha256(
-        json.dumps({"git_commit": commit, "file_hashes": hashes}, sort_keys=True).encode()
+        json.dumps(
+            {"git_commit": commit, "file_hashes": hashes}, sort_keys=True
+        ).encode()
     ).hexdigest()
     return {"git_commit": commit, "code_version": digest, "file_hashes": hashes}
 

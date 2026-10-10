@@ -1,6 +1,10 @@
 # 技術驗收與發布範圍
 
-2026-10-11離線pytest：163 passed、6 skipped、4 warnings。原15項仍通過，原測試檔內容保持。合成fixture明確標示MOCK，不當真實API結果。
+2026-10-11最新離線pytest：185 passed、6 skipped、4 warnings。原15項仍通過，原測試檔內容保持。合成fixture明確標示MOCK，不當真實API結果。
+
+新增22項涵蓋逐30ETF報告、缺漏/重複/過期/未來時點阻擋、Active Share連續交易日與重跑、舊日持股不能累計新日違規、產業來源/可得時間、Optimizer證據檢查與設定驗證、Git版本讀取逾時仍保留實際內容雜湊。產業警示不是官方限制；此輪未新增真實ETF資料驗收。
+
+受限沙箱曾卡在Windows asyncio初始化的本機socketpair，尚未進入測試業務邏輯；堆疊診斷後在允許本機loopback的環境完成整套離線測試。已取消的診斷執行不算通過。6項跳過仍為顯式啟用或需外部服務的測試。
 
 實際Research與Investment API亦已執行；詳細金融回傳、投資配置、績效、模型trace、生成文件與草稿保留本機 gitignored reports及outputs。此PR只含程式碼、官方設定、測試、操作文件及技術驗收，不發布這些衍生金融資料。
 
