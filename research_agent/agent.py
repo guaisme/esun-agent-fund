@@ -18,6 +18,7 @@ from google.adk.models.llm_response import LlmResponse
 from google.adk.tools.mcp_tool import McpToolset
 from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
 from google.genai import types
+from .reliability import ReliableResearchAgent, ReliableTool, RetryPolicy, bounded_call
 
 load_dotenv(Path(__file__).with_name(".env"), override=False)
 os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "FALSE")
@@ -28,9 +29,10 @@ TAIPEI = timezone(timedelta(hours=8))
 
 def redact(text: str) -> str:
     """Remove the configured key and common credential representations."""
-    key = os.getenv("GOOGLE_API_KEY", "")
-    if key:
-        text = text.replace(key, "[REDACTED]")
+    for name in ("GOOGLE_API_KEY", "FINMIND_TOKEN"):
+        key = os.getenv(name, "")
+        if key:
+            text = text.replace(key, "[REDACTED]")
     return re.sub(r"(?i)((?:api[_-]?key|key|authorization)\s*[=:]\s*)([^%\s&,;]+)", r"\1[REDACTED]", text)
 
 
@@ -72,14 +74,16 @@ class ResearchMcpToolset(McpToolset):
 
     async def get_tools(self, readonly_context: Any = None) -> list[Any]:
         try:
-            async with asyncio.timeout(45):
-                tools = await super().get_tools(readonly_context)
+            # ADK get_tools already retries one session/discovery failure.
+            # Do not multiply its transport retries with another retry layer.
+            policy = RetryPolicy(max_retries=0)
+            tools = await bounded_call(lambda: super(ResearchMcpToolset, self).get_tools(readonly_context), policy, 45, "MCP discovery")
             missing = set(TOOLS) - {tool.name for tool in tools}
             if missing:
                 LOG.error("MCP discovery missing required tools: %s", ",".join(sorted(missing)))
                 return []
             LOG.info("MCP discovery ready tools=%s", ",".join(tool.name for tool in tools))
-            return tools
+            return [ReliableTool(tool) for tool in tools]
         except Exception as error:
             LOG.error("MCP discovery failed error_type=%s", type(error).__name__)
             return []
@@ -176,6 +180,7 @@ def model_error(callback_context: Any, llm_request: Any, error: Exception) -> Ll
         403: "請檢查 API Key 權限與 Gemini API 存取限制。",
         404: "目前 GEMINI_MODEL 不存在或你的帳號無法使用；請在 research_agent/.env 改用帳號可用的模型，重新啟動 adk web。",
         429: "Gemini API 配額或速率限制已達上限，請檢查額度並稍後重試。",
+        503: "Gemini 服務暫時不可用，有限次重試後仍失敗；請稍後重試。",
     }
     if isinstance(error, TimeoutError) or "timeout" in type(error).__name__.lower():
         hint = "Gemini 等待回應逾時；工具資料可能已回傳，但模型尚未完成整理。請建立新 session 後重試。"
@@ -230,7 +235,8 @@ def create_agent() -> LlmAgent:
         ),
         tool_filter=list(TOOLS),
     )
-    return LlmAgent(
+    policy = RetryPolicy.from_env()
+    return ReliableResearchAgent(
         name="esun_research_agent",
         model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
         description="使用 ToAlpha MCP 真實資料的台股研究助理",
@@ -242,7 +248,7 @@ def create_agent() -> LlmAgent:
         generate_content_config=types.GenerateContentConfig(
             temperature=0.1,
             http_options=types.HttpOptions(
-                timeout=60_000, retry_options=types.HttpRetryOptions(attempts=1),
+                timeout=int(policy.request_timeout * 1000), retry_options=types.HttpRetryOptions(attempts=1),
             ),
         ),
     )
