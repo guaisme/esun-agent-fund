@@ -28,6 +28,8 @@ def test_import_and_configuration(monkeypatch):
     assert isinstance(root, LlmAgent)
     assert root.name == "esun_research_agent"
     assert root.model == "gemini-2.5-flash"
+    assert root.generate_content_config.http_options.timeout == 60_000
+    assert root.generate_content_config.http_options.retry_options.attempts == 1
     monkeypatch.setenv("GEMINI_MODEL", "custom-model")
     assert agent.create_agent().model == "custom-model"
 
@@ -99,6 +101,13 @@ def test_model_error_is_not_overwritten():
     assert agent.require_evidence(ctx, response) is None
     agent.begin_research(ctx)
     assert not ctx.state["temp:research_model_error"]
+
+
+def test_model_timeout_is_reported():
+    ctx = context()
+    response = agent.model_error(ctx, None, TimeoutError())
+    assert "Gemini 等待回應逾時" in response.content.parts[0].text
+    assert agent.require_evidence(ctx, response) is None
 
 
 def test_evidence_guard_ignores_nonfinal_fragments():

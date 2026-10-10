@@ -72,6 +72,9 @@ README.md
 
 使用 [ToAlpha 官方文件](https://toalpha.tw/mcp-docs) 與 [ADK 官方 MCP 文件](https://adk.dev/tools-custom/mcp-tools/)。
 連線是 `StreamableHTTPConnectionParams`，HTTP timeout 15 秒、SSE read timeout 30 秒；工具探索整體最多 45 秒。
+Gemini 每次 HTTP 請求 timeout 60 秒（SDK 單位為毫秒），attempts=1，不自動重試該請求。
+這是每個請求的逾時，並非整輪研究總時限；網路傳輸持續有進度時總時間仍可能較長。
+終端會顯示 `Gemini request start` 與 `Gemini response received`，方便區分模型等待與 MCP 等待。
 僅暴露以下五個工具；schema 從服務即時取得，不在程式手動重建：
 
 | 工具 | 文件中的參數 |
@@ -158,7 +161,7 @@ Remove-Item Env:RUN_TOALPHA_INTEGRATION
 
 | 檢查 | 實際結果 |
 | --- | --- |
-| `python -m pytest -q` | 修正錯誤提示與 Uvicorn logging 後 14 passed、1 skipped；live test 預設 skip |
+| `python -m pytest -q` | 加入 Gemini timeout 後 15 passed、1 skipped；live test 預設 skip |
 | `RUN_TOALPHA_INTEGRATION=1` 的 real_toalpha test | 1 passed；tools/list、五個工具真正呼叫、ADK toolset allowlist 探索通過 |
 | ADK Web | CLI 伺服器啟動成功；TestClient 驗證首頁 200、list-apps 包含 research_agent，AgentLoader 成功載入 |
 | `.env` 忽略與 diff 檢查 | 通過 |
@@ -167,6 +170,7 @@ Remove-Item Env:RUN_TOALPHA_INTEGRATION
 後續問題診斷已使用本機 `.env` 做一次真實市場概況查詢：gemini-2.5-flash 回傳 HTTP 404；gemini-3.8-flash 成功自主呼叫 data_status 與 market_overview。
 三題完整手動驗收仍未全部完成。程式已修正 API 錯誤被資料不足保護訊息覆蓋的問題，並加入 404／429 等安全提示與回歸測試。
 金鑰遮罩保留 Uvicorn access log 的五個參數及狀態碼型別，避免 `expected 5, got 0`；另有實際 AccessFormatter 回歸測試。
+後續 UI 查詢約 13 秒完成月營收與法人資料工具回應，但未收到最終模型回答，使用者在約 242 秒時停止；新增 Gemini HTTP timeout 與錯誤提示，為等待增加請求層級限制。
 
 即時營收回應期別為 2026-09，市場及法人資料日期為 2026-10-08；只代表供應商這次實際回應，沒有獨立重新核算金融數值。
 ADK/MCP 套件有 experimental／deprecation warnings，測試未失敗。這些不等於 Gemini 端到端驗收已完成。

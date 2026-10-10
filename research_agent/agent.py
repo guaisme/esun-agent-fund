@@ -103,6 +103,8 @@ def check_api_key(callback_context: Any, llm_request: Any) -> LlmResponse | None
     callback_context.state["temp:research_model_calls"] = calls
     if calls > 8:
         return text_response("本輪研究已達工具規劃迴圈上限，研究未完成。請縮小查詢範圍後重試。")
+    LOG.info("Gemini request start call=%s data_received=%s", calls,
+             callback_context.state.get("temp:research_data_ok", False))
     return None
 
 
@@ -175,7 +177,10 @@ def model_error(callback_context: Any, llm_request: Any, error: Exception) -> Ll
         404: "目前 GEMINI_MODEL 不存在或你的帳號無法使用；請在 research_agent/.env 改用帳號可用的模型，重新啟動 adk web。",
         429: "Gemini API 配額或速率限制已達上限，請檢查額度並稍後重試。",
     }
-    hint = hints.get(code, "請檢查金鑰、模型存取權、網路及 API 額度。")
+    if isinstance(error, TimeoutError) or "timeout" in type(error).__name__.lower():
+        hint = "Gemini 等待回應逾時；工具資料可能已回傳，但模型尚未完成整理。請建立新 session 後重試。"
+    else:
+        hint = hints.get(code, "請檢查金鑰、模型存取權、網路及 API 額度。")
     status = f"（HTTP {code}）" if code else ""
     return text_response(f"Gemini API 呼叫失敗{status}。{hint}本次研究未完成，不能宣稱取得完整結果。")
 
@@ -185,6 +190,7 @@ def require_evidence(callback_context: Any, llm_response: LlmResponse) -> LlmRes
         return None
     if llm_response.partial or llm_response.error_code:
         return None
+    LOG.info("Gemini response received call=%s", callback_context.state.get("temp:research_model_calls", 0))
     content = llm_response.content
     if not content or not content.parts or all(part.thought for part in content.parts):
         return None
@@ -233,7 +239,12 @@ def create_agent() -> LlmAgent:
         before_model_callback=check_api_key, after_model_callback=require_evidence,
         before_tool_callback=log_tool, after_tool_callback=record_tool,
         on_tool_error_callback=tool_error, on_model_error_callback=model_error,
-        generate_content_config=types.GenerateContentConfig(temperature=0.1),
+        generate_content_config=types.GenerateContentConfig(
+            temperature=0.1,
+            http_options=types.HttpOptions(
+                timeout=60_000, retry_options=types.HttpRetryOptions(attempts=1),
+            ),
+        ),
     )
 
 
