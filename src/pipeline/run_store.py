@@ -139,6 +139,10 @@ class RunStore:
             "gemini",
             "holdings",
             "cash_ratio",
+            "target_cash_ratio",
+            "estimated_cash_ntd",
+            "estimated_cash_ratio",
+            "fundamental_coverage",
             "active_share",
             "schema",
             "semantics",
@@ -147,6 +151,12 @@ class RunStore:
         text += ["", "阻擋／錯誤："] + [
             f"- {e}" for e in report["errors"] + report["warnings"]
         ]
+        if report.get("decision_report_path"):
+            text += [
+                "",
+                "逐檔決策、委託股數、估計現金：investment-report.md；委託清單：proposed-orders.csv。",
+                "cash_ratio 為舊版目標權重剩餘欄位；估計結餘請看 estimated_cash_ntd／estimated_cash_ratio。",
+            ]
         (directory / "report.md").write_text("\n".join(text), encoding="utf-8")
 
 

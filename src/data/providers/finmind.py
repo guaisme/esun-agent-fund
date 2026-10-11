@@ -15,7 +15,9 @@ class FinMindProvider(BaseProvider):
             )
         self.client, self.universe = client, universe
 
-    def fetch(self, dataset: str, ticker: str, start: str, end: str) -> tuple[list[dict], str, str]:
+    def fetch(
+        self, dataset: str, ticker: str, start: str, end: str
+    ) -> tuple[list[dict], str, str]:
         list(days(start, end))
         self.universe.get_stock_info(ticker)
         token = os.getenv("FINMIND_TOKEN", "")
@@ -28,12 +30,19 @@ class FinMindProvider(BaseProvider):
             raise ProviderError("FinMind data/schema error")
         return p["data"], fetched, raw
 
-    def get_daily_prices(self, ticker: str, start_date: str, end_date: str) -> list[dict]:
-        data, fetched, raw = self.fetch("TaiwanStockPrice", ticker, start_date, end_date)
+    def get_daily_prices(
+        self, ticker: str, start_date: str, end_date: str
+    ) -> list[dict]:
+        data, fetched, raw = self.fetch(
+            "TaiwanStockPrice", ticker, start_date, end_date
+        )
         result = []
         market = self.universe.get_stock_info(ticker)["market"]
         for r in data:
-            if str(r.get("stock_id")) != ticker or not start_date <= r["date"] <= end_date:
+            if (
+                str(r.get("stock_id")) != ticker
+                or not start_date <= r["date"] <= end_date
+            ):
                 raise ProviderError("FinMind identity/date mismatch")
             result.append(
                 price_row(
@@ -55,7 +64,9 @@ class MonthlyRevenueProvider:
     def __init__(self, provider: FinMindProvider) -> None:
         self.provider = provider
 
-    def get_monthly_revenue(self, ticker: str, start_date: str, end_date: str) -> list[dict]:
+    def get_monthly_revenue(
+        self, ticker: str, start_date: str, end_date: str
+    ) -> list[dict]:
         data, fetched, raw = self.provider.fetch(
             "TaiwanStockMonthRevenue", ticker, start_date, end_date
         )
@@ -89,4 +100,24 @@ class MonthlyRevenueProvider:
                 source_created_date=r.get("create_time"),
             )
             result.append(row)
-        return result
+        # Compute only from rows in this observed provider snapshot. Missing or
+        # zero denominators remain null; no fabricated publication timestamps.
+        periods = {(r["revenue_year"], r["revenue_month"]): r for r in result}
+        for row in result:
+            year, month = row["revenue_year"], row["revenue_month"]
+            previous = periods.get(
+                (year if month > 1 else year - 1, month - 1 if month > 1 else 12)
+            )
+            annual = periods.get((year - 1, month))
+            for field, baseline in [("revenue_mom", previous), ("revenue_yoy", annual)]:
+                if (
+                    baseline
+                    and baseline["monthly_revenue"]
+                    and row["monthly_revenue"] is not None
+                ):
+                    row[field] = (
+                        row["monthly_revenue"] / baseline["monthly_revenue"] - 1
+                    )
+            row["growth_unit"] = "ratio"
+            row["growth_method"] = "observed_monthly_revenue / observed_baseline - 1"
+        return sorted(result, key=lambda r: (r["revenue_year"], r["revenue_month"]))

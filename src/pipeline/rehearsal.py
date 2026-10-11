@@ -13,7 +13,7 @@ import sys
 
 from src.competition.configuration import code_fingerprint, load_settings
 from src.competition.models import PortfolioState
-from src.competition.serialization import load_state, write_json
+from src.competition.serialization import load_state, write_json, json_value
 from src.data.time_safety import TAIPEI, aware, now_iso
 from src.data.universe import ROOT, UniverseLoader
 from .run_store import RunStore, exclusive_lock, sha256
@@ -43,6 +43,7 @@ def rehearsal_run(args) -> dict:
                 initial=args.initial,
                 data_root=str(args.data_root.resolve()),
                 code_fingerprint=code_fingerprint(),
+                require_fundamentals=not getattr(args, "allow_price_only", False),
             )
             for key in ("calendar", "state", "benchmarks"):
                 path = getattr(args, key, None)
@@ -280,6 +281,23 @@ async def _execute(request: dict, report: dict) -> None:
     ):
         raise ValueError("OfficialCalendarPriceConflict")
     settings = load_settings()
+    if inputs.get("require_fundamentals", False):
+        settings = replace(
+            settings,
+            alpha=replace(
+                settings.alpha,
+                version="rehearsal-revenue-flow-1.0",
+                missing_policy="exclude",
+                weights={
+                    "momentum_20d": 0.25,
+                    "volatility_20d": -0.15,
+                    "foreign_flow_20d": 0.15,
+                    "trust_flow_5d": 0.15,
+                    "revenue_yoy": 0.20,
+                    "revenue_acceleration": 0.10,
+                },
+            ),
+        )
     # Context feasibility is checked before any external call.
     context = build_context(
         data=data,
@@ -290,6 +308,38 @@ async def _execute(request: dict, report: dict) -> None:
         alpha=settings.alpha,
         calendar=sessions,
     )
+    from .fundamentals import fundamental_coverage
+
+    fundamental_report = fundamental_coverage(
+        context.snapshot.values, UniverseLoader().get_all_tickers()
+    )
+    previous_month = (
+        clock.year if clock.month > 1 else clock.year - 1,
+        clock.month - 1 if clock.month > 1 else 12,
+    )
+    current_revenue = {
+        r["ticker"]
+        for r in data["revenue"]
+        if (r["revenue_year"], r["revenue_month"]) == previous_month
+    }
+    fundamental_report["required_revenue_period"] = "%04d-%02d" % previous_month
+    fundamental_report["missing_latest_revenue"] = sorted(
+        set(UniverseLoader().get_all_tickers()) - current_revenue
+    )
+    if fundamental_report["missing_latest_revenue"]:
+        fundamental_report["status"] = "INCOMPLETE"
+    write_json(directory / "fundamental-coverage.json", fundamental_report)
+    report["fundamental_coverage"] = {
+        k: v for k, v in fundamental_report.items() if k != "missing"
+    }
+    if (
+        inputs.get("require_fundamentals", False)
+        and fundamental_report["status"] != "COMPLETE"
+    ):
+        report["errors"].append("FundamentalCoverageIncomplete")
+        raise ValueError("FundamentalCoverageIncomplete")
+    if fundamental_report["status"] != "COMPLETE":
+        report["warnings"].append("ExplicitIncompleteFundamentalRehearsal")
     if len(context.rankings["rankings"]) < 20:
         raise ValueError("InsufficientPITSafeRankings")
     market = await get_live_market_snapshot()
@@ -396,6 +446,14 @@ async def _execute(request: dict, report: dict) -> None:
         semantics=validation.status,
         holdings=sum(float(v) > 0 for v in decision["target_weights"].values()),
         cash_ratio=1 - sum(float(v) for v in decision["target_weights"].values()),
+        target_cash_ratio=1
+        - sum(float(v) for v in decision["target_weights"].values()),
+        estimated_cash_ntd=json_value(result.get("optimizer", {}))
+        .get("diagnostics", {})
+        .get("cash"),
+        estimated_cash_ratio=json_value(result.get("optimizer", {}))
+        .get("diagnostics", {})
+        .get("cash_ratio"),
         dplan_audit_path=str(directory / "rehearsal-dplan-audit.json"),
         rehearsal_checks_passed=validation.schema_valid
         and not any(i.severity == "HARD_FAIL" for i in validation.issues),
@@ -405,6 +463,10 @@ async def _execute(request: dict, report: dict) -> None:
     )
     if not report["rehearsal_checks_passed"]:
         raise ValueError("RehearsalDPlanValidationFailed")
+    from .decision_report import export_decision_report
+
+    export_decision_report(directory, directory)
+    report["decision_report_path"] = str(directory / "investment-report.md")
 
 
 def run_rehearsal_worker(request: dict) -> dict:
