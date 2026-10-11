@@ -12,9 +12,13 @@ from .providers.tpex import TPExProvider
 from .providers.finmind import FinMindProvider, MonthlyRevenueProvider
 from .download import Downloader
 from .quality import DataQualityValidator
+from .providers.base import ProviderError
 
 
 def main(argv: list[str] | None = None) -> int:
+    from dotenv import load_dotenv
+
+    load_dotenv(ROOT / "research_agent/.env", override=False)
     parser = argparse.ArgumentParser(
         description="ESUN official universe and market data infrastructure"
     )
@@ -84,21 +88,20 @@ def main(argv: list[str] | None = None) -> int:
                 else None
             )
             if a.command == "revenue":
-                if not a.ticker:
-                    parser.error(
-                        "revenue requires --ticker (repeat per ticker under quota)"
-                    )
                 if not fallback:
                     raise ValueError(
                         "Revenue currently requires explicit FINMIND_ENABLED=1"
                     )
-                rows = MonthlyRevenueProvider(fallback).get_monthly_revenue(
-                    a.ticker, a.start, a.end
+                from .revenue_download import download_revenue
+
+                result = download_revenue(
+                    MonthlyRevenueProvider(fallback),
+                    universe,
+                    store,
+                    a.start,
+                    a.end,
+                    a.ticker,
                 )
-                issues = DataQualityValidator(universe).validate(rows, "revenue")
-                if any(i["level"] == "ERROR" for i in issues):
-                    raise ValueError("Revenue quality rejected")
-                result = dict(written=store.save("revenue", rows), issues=issues)
             else:
                 result = Downloader(
                     universe,
@@ -146,6 +149,8 @@ def main(argv: list[str] | None = None) -> int:
             if isinstance(result, dict)
             and (
                 result.get("failures")
+                or result.get("empty_stocks")
+                or result.get("unattempted")
                 or result.get("quality_counts", {}).get("ERROR")
                 or (
                     a.command == "quality"

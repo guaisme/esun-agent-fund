@@ -473,3 +473,35 @@ python -m pytest -q
 ## 競賽前真實 API 工程演練
 
 新增 `rehearsal-run --live`，串接真實本地資料、MCP市場證據、Gemini投資決策、既有Optimizer與D-Plan，獨立保存演練audit，正式提交永遠BLOCKED。不改daily-run期間／期限／規則，也不接受指定未來日期。詳見 [演練操作指南](docs/precompetition_rehearsal.md)。Research來源驗證改為比對工具回傳的來源／連結，接受source與完整機構名稱，不接受僅有空泛標籤。法人五日逐日明細不足仍未解決。
+# 決策報告與月營收／法人完整度更新
+
+演練輸出增加 `investment-report.md`（逐檔理由、證據、目標／估計權重、委託股數、資金）及 `proposed-orders.csv`。這是未成交委託，沒有實際交易結果、已實現損益或正式結算。舊 `cash_ratio` 保留相容但僅表示目標權重剩餘；實際估計請讀 `estimated_cash_ntd` 與 `estimated_cash_ratio`（分母為輸入 NAV）。
+
+保存的舊演練可離線匯出，不消耗 API，亦不改寫原始決策：
+
+```powershell
+python -m src.pipeline.cli decision-report "outputs/rehearsals/日期/RunID" --output "outputs/decision-review"
+notepad outputs/decision-review/investment-report.md
+```
+
+新版 Live 演練預設要求所有150檔具備5／20交易日法人比例、月營收 YoY／MoM／加速度，以及前一個日曆月的實際觀測營收。資料尚未公布或無法取得時阻擋，不假設法定期限即代表實際已公布。這是嚴格完整度需求，不強迫尚未上市／停牌股票擁有不存在資料。缺漏見 `fundamental-coverage.json`；資料不足在 MCP／Gemini 前停止。明確加 `--allow-price-only` 才可進行不完整資料演練，仍不可提交。
+
+完整模式使用 `rehearsal-revenue-flow-1.0` 實驗排名：20日動能25%、波動-15%、20日外資15%、5日投信15%、營收YoY20%、營收加速度10%；這些是工程基線，未宣稱投資有效性。基本面觀察及來源會供模型引用。
+
+## 取得資料並重跑（Windows PowerShell）
+
+法人來自TWSE／TPEx官方API。月營收目前使用FinMind v4，須先確認使用條款、可用權限與額度；不從ToAlpha批量匯出。沿用 `research_agent/.env` 的 `FINMIND_ENABLED=1`、`FINMIND_TOKEN`，不要提交或貼出Token。
+
+```powershell
+# 範例日期為2026-10-11演練；之後按前一交易日調整
+python -m src.data.cli flows --start 2026-09-01 --end 2026-10-08 --output outputs/flows-download.json
+# 不加ticker即依官方150檔逐一下載；需含同比基期與相鄰月份
+python -m src.data.cli revenue --start 2025-03-01 --end 2026-10-11 --output outputs/revenue-download.json
+python -m src.pipeline.cli rehearsal-run --live --rerun --calendar data/metadata/twse-calendar-2026.json --initial
+```
+
+下載具有限重試、序列限速、原始回應快取與冪等儲存；連續三檔營收錯誤即停止，保存已成功資料、失敗及未嘗試清單，修復後重跑原命令續作。`--refresh` 明確重新取來源，不刪除原始歷史回應。FinMind的 `date` 是所屬期別標記，不是實際公布時間；`create_time` 也不自動視為公告時間。YoY／MoM由同次已觀測金額計算，分母缺失／零值保持null；不自行填日期或數值。
+
+資料欄位依據：[FinMind 月營收文件](https://finmind.github.io/tutor/TaiwanMarket/Fundamental/)。
+
+**範圍限制：完整度只涵蓋本專案已支持的月營收與法人，不代表完整財報。EPS／損益表、資產負債表、現金流、產業分類與公司行動尚未接入或完成驗收。缺完整財報時不能聲稱獲利成長、財務健全或產業復甦。正式提交、Active Share、時間與庫存對帳閘門保持原狀。**

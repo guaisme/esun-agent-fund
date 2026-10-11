@@ -18,11 +18,14 @@ from src.data.time_safety import now_iso
 from .decision import InvestmentDecision, parse_decision
 from .tools import DecisionContext, readonly_tools
 
-PROMPT_VERSION = "investment-prompt-1.0"
+PROMPT_VERSION = "investment-prompt-1.1"
 INSTRUCTION = """你是 TEAM_11586 玉山競賽的投資決策 Agent，以繁體中文分析。
 先實際呼叫 get_portfolio、get_market_snapshot、get_rankings、get_data_availability，
 根據工具證據自主決定 regime、候選股票、目標權重、交易或持有意圖及理由。
 禁止捏造金融事實、資料日期或來源；缺資料須在 additional_research_needed 列明。
+價格動能與波動不能證明獲利成長、EPS、產能利用率、產業復甦或估值低廉。
+只有相關基本面觀察存在時才可引用此類事實；月營收不等於利潤，法人流向不等於財報。
+對個股基本面分析，必須先呼叫 get_features(ticker)，引用月營收／法人對應觀察。
 工具提供的 observation ID 是唯一可引用事實；推論和反證寫在 rationale／market_logic。
 不可從當日成交／收盤資料作盤前決策。不可寫委託股數，股數由官方公式機械推導。
 不得預設偏好半導體，應以實際訊號及風險證據判斷。
@@ -58,10 +61,13 @@ def create_investment_agent(
                 or proposal.model_version != model
                 or proposal.strategy_version != context.strategy_version
             ):
-                raise ValueError("Use exact context date, cutoff, model and strategy version")
+                raise ValueError(
+                    "Use exact context date, cutoff, model and strategy version"
+                )
             observations = {r["obs_id"] for r in context.observations}
             if not set(proposal.observation_refs) <= observations or any(
-                not set(r.premise_refs) <= observations for r in proposal.rationale.values()
+                not set(r.premise_refs) <= observations
+                for r in proposal.rationale.values()
             ):
                 raise ValueError("Use only actual observation references")
             submission["decision"] = proposal
@@ -93,7 +99,8 @@ def create_investment_agent(
         + json.dumps(contract, ensure_ascii=False)
         + f"\ntrade_date={context.trade_date}; data_cutoff={context.data_cutoff}; model_version={model}; strategy_version={context.strategy_version}",
         tools=readonly_tools(
-            context, PortfolioOptimizer(settings.optimizer, settings.policy, settings.costs)
+            context,
+            PortfolioOptimizer(settings.optimizer, settings.policy, settings.costs),
         )
         + [submit_investment_decision],
         before_tool_callback=limit_tools,
@@ -101,7 +108,10 @@ def create_investment_agent(
 
 
 async def run_investment_decision(
-    context: DecisionContext, *, feedback: list[dict] | None = None, model: str | None = None
+    context: DecisionContext,
+    *,
+    feedback: list[dict] | None = None,
+    model: str | None = None,
 ) -> tuple[InvestmentDecision | None, dict]:
     trace = {
         "status": "STARTED",
@@ -115,8 +125,13 @@ async def run_investment_decision(
         "feedback": feedback or [],
         "synthetic": context.fixture,
     }
-    if not os.getenv("GOOGLE_API_KEY") or os.getenv("GOOGLE_API_KEY") == "YOUR_API_KEY_HERE":
-        trace.update(status="SKIPPED", error_type="MissingAPIKey", run_completed_at=now_iso())
+    if (
+        not os.getenv("GOOGLE_API_KEY")
+        or os.getenv("GOOGLE_API_KEY") == "YOUR_API_KEY_HERE"
+    ):
+        trace.update(
+            status="SKIPPED", error_type="MissingAPIKey", run_completed_at=now_iso()
+        )
         return None, trace
     submission = {}
     agent = create_investment_agent(context, model, submission)
@@ -165,7 +180,9 @@ async def run_investment_decision(
                         )
                 if event.is_final_response() and event.content:
                     final = "".join(
-                        part.text or "" for part in event.content.parts or [] if not part.thought
+                        part.text or ""
+                        for part in event.content.parts or []
+                        if not part.thought
                     )
                 if submission.get("decision") is not None:
                     final = submission["raw_response"]
@@ -183,7 +200,9 @@ async def run_investment_decision(
             }
             <= called
         ):
-            raise ValueError("Required evidence and validation tools not actually called")
+            raise ValueError(
+                "Required evidence and validation tools not actually called"
+            )
         if (
             decision.trade_date != context.trade_date
             or decision.data_cutoff != context.data_cutoff
@@ -196,7 +215,9 @@ async def run_investment_decision(
             not set(r.premise_refs) <= valid_obs for r in decision.rationale.values()
         ):
             raise ValueError("Agent invented observation references")
-        trace.update(status="DECISION_PARSED", decision=decision.model_dump(mode="json"))
+        trace.update(
+            status="DECISION_PARSED", decision=decision.model_dump(mode="json")
+        )
         return decision, trace
     except Exception as error:
         trace.update(

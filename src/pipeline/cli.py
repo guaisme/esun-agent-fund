@@ -36,10 +36,20 @@ def parser() -> argparse.ArgumentParser:
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("universe")
     commands.add_parser("availability")
+    report_export = commands.add_parser(
+        "decision-report", help="Export saved decision without APIs or fills"
+    )
+    report_export.add_argument("run_directory", type=Path)
+    report_export.add_argument("--output", type=Path, required=True)
     rehearsal = commands.add_parser(
         "rehearsal-run", help="Explicit live engineering rehearsal; never submittable"
     )
     rehearsal.add_argument("--live", action="store_true")
+    rehearsal.add_argument(
+        "--allow-price-only",
+        action="store_true",
+        help="Explicit incomplete-data rehearsal; default requires all 150 revenue/flow factors",
+    )
     rehearsal.add_argument("--calendar", type=Path, required=True)
     rehearsal.add_argument("--benchmarks", type=Path)
     rehearsal_inventory = rehearsal.add_mutually_exclusive_group(required=True)
@@ -217,6 +227,11 @@ def main(argv: list[str] | None = None) -> int:
         "generate-dplan": "dry-run",
     }.get(args.command, args.command)
     settings = load_settings()
+    if args.command == "decision-report":
+        from .decision_report import export_decision_report
+
+        print(export_decision_report(args.run_directory, args.output))
+        return 0
     if args.command == "rehearsal-run":
         from .rehearsal import rehearsal_run
 
@@ -235,6 +250,11 @@ def main(argv: list[str] | None = None) -> int:
             "rehearsal_checks_passed",
             "holdings",
             "cash_ratio",
+            "target_cash_ratio",
+            "estimated_cash_ntd",
+            "estimated_cash_ratio",
+            "fundamental_coverage",
+            "decision_report_path",
             "dplan_audit_path",
             "errors",
             "warnings",
