@@ -1,7 +1,9 @@
 # ESUN AI Agent ETF Competition 2026
 
 第一階段是使用 **Google ADK + Gemini AI Studio + ToAlpha Streamable HTTP MCP** 的台灣股票 Research Agent。
-範圍只有市場、個股月營收及三大法人研究；不含交易、買賣決策、Portfolio Optimizer、回測或 D-Plan。
+Research Agent 仍只負責市場、月營收與法人研究。Phase 3–7 在獨立模組加入模擬帳務、時點安全因子、成本檢查、Investment Agent 與 D-Plan 本地生成；沒有券商交易或競賽自動提交。
+
+技術驗收見 [驗證狀態](docs/validation_status.md)。詳細金融驗收保留本機 reports/phase3_7_acceptance.md，不發布GitHub。正式 competition-ready 狀態為 **BLOCKED**，請勿將成功產生草稿等同正式驗收。
 
 ## Windows 11 / Conda 啟動
 
@@ -10,7 +12,7 @@
 ```powershell
 git clone https://github.com/guaisme/esun-agent-fund.git
 cd esun-agent-fund
-git switch feature/phase2-market-data
+git switch feature/phase3-7-integrated
 conda create -n esun-agent-fund python=3.11 -y
 conda activate esun-agent-fund
 python --version
@@ -339,3 +341,111 @@ Live E2E 以獨立 InMemory session 查三題，檢查 Gemini 真的產生 requi
 ### 已知限制與下一階段
 
 目前原公告時間、完整交易日／停牌原因、調整價／corporate actions 與競賽成交均價定義尚未驗收；150 檔未必都已有 120 日上市／上櫃歷史。這些需要官方來源證據，不能從缺漏推定。月營收目前為明確 opt-in FinMind；批量法人及營收長歷史尚需受供應商額度分批驗收。下一階段應先補資料可用時間證據、完整 calendar／corporate actions 與三題 E2E 全通過，再考慮有測試覆蓋的因子和 D-Plan validator；本次沒有實作那些功能。
+
+
+## Phase 3–7 架構與實際狀態
+
+```text
+config/                     官方150股票、30ETF、成本/策略/Agent設定、凍結策略說明
+research_agent/             原 Google ADK Research Agent，保留 adk web
+src/data/                   TWSE/TPEx/FinMind、SQLite/Parquet、品質與時間檢查
+src/competition/            Decimal帳務、整張訂單、公司行動、官方行事曆、對帳
+src/strategy/               PIT因子、縮尾與標準化、三基準、walk-forward
+src/portfolio/              成本/周轉/現金壓力檢查、合規、30ETF Active Share
+src/agent/                  獨立 Investment Agent、唯讀證據工具、型別決策
+src/dplan/                  v4.2 schema與語意驗證、官方策略Word範本填入
+src/pipeline/               完整離線重播、資料上下文、真實Gemini dry-run與CLI
+reports/                    實際驗收、限制及證據摘要
+outputs/                    本地trace、草稿、報告、Word/PDF；不提交Git
+```
+
+金額與股數帳務使用 Decimal / int；VWAP 由官方成交金額（元）除成交股數計算，NAV 使用收盤價，不用 adjusted_close 替代成交價格。
+初始現金10億元、佣金0.1425%、賣出稅0.3%。整張為1000股，成交量欄位統一為股。
+交易規劃數量機械計算為 `floor(目標權重 × 前日NAV / 前日官方收盤 / 1000) × 1000 - 前日持股數`。
+股價缺漏時阻擋，不補虛構價格。成本取至0.01元 ROUND_HALF_UP 是明確研究假設，尚待主辦方確認。
+
+每輪先取得前日已結算持股、官方收盤與截止時間資料，讓 Gemini 透過唯讀工具自主產生目標與理由。
+Optimizer 只給出有界檢查/調整建議，修改目標須回到 Agent 重評；不手改 D-Plan 訂單。
+最後驗證來源→觀察→推論→決策→訂單、持股覆蓋、時間、整張、現金、資金用途及正式就緒閘門。
+這是可審計的決定式啟發式檢查器，沒有宣稱求得全域最優解。
+
+### 設定與時點模式
+
+- `config/competition.json`：TEAM_11586、官方限制、費稅、未確認規則旗標。
+- `config/alpha_strategy.yaml`：5日/20日動能、20日波動扣分、縮尾、z-score與缺值規則。
+- `config/optimizer.yaml`：持股數、周轉門檻、不交易區間、成本、5%買賣壓力與修正次數。
+- 同檔可設定 Active Share 內部安全門檻（預設25%）、產業集中警示（35%）及基準持股最大年齡（7日）；法定20%門檻不能由內部設定放寬。
+- `config/data_policy.yaml`：嚴格可得、研究假設、合成測試模式。
+- `config/agent.yaml`：模型及有限重試2秒起、上限15秒、jitter、工具上限與整輪240秒deadline。
+- `config/strategy_declaration.json`：實際 Gemini 生成並完成官方Word範本視覺QA的凍結文字。不同策略版本須重新宣告，不可靜默替換。
+
+`strict_verified` 預設只接受可驗證截止前已知的資料；今天下載的歷史 snapshot 不代表歷史當日已可知。
+`research_assumptions` 明確假設前日價格在次日可得，仍排除公布時間未知營收，並揭露歷史修訂/公司行動缺口。
+`synthetic_fixture` 僅接受標示的合成fixture，不把真實資料混入測試模式；測試資料不進正式 data。
+同日收盤與量、未來法人、未知公布時間營收，不可進入08:30決策。市場/產業基準未取得時相對強弱保持缺值，不拿150股票均值冒充加權指數。
+
+### Windows PowerShell 指令
+
+以下指令於 repository 根目錄執行，使用既有 Python 3.11 Conda 環境；不需要 Codex CLI。
+
+```powershell
+conda activate esun-agent
+python -m pip install -r requirements.txt
+python -m src.pipeline.cli universe
+python -m src.pipeline.cli availability
+python -m src.pipeline.cli simulate --output outputs/offline-replay
+python -m src.pipeline.cli offline-dry-run --output outputs/offline-decision-pipeline
+python -m src.pipeline.cli replay-decision outputs/offline-decision-pipeline/2026-10-27 --output outputs/replay-check.json
+python -m src.pipeline.cli features --as-of '2026-10-12T08:30:00+08:00' --output outputs/features.json
+python -m src.pipeline.cli backtest --start 2026-09-03 --end 2026-10-08 --mode research_assumptions
+python -m src.pipeline.cli compare --start 2026-09-03 --end 2026-10-08 --mode research_assumptions --output outputs/comparison
+python -m src.pipeline.cli walk-forward --mode research_assumptions --output outputs/walk-forward.json
+python -m src.pipeline.cli walk-forward --rolling --mode research_assumptions --output outputs/walk-forward-rolling.json
+python -m src.pipeline.cli validate-dplan docs/official/D-Plan_TEAM_042_2026-10-27.json
+python -m src.pipeline.cli dry-run --trade-date 2026-10-27 --as-of '2026-10-27T08:30:00+08:00' --initial
+python -m pytest -q
+```
+
+`simulate` 是四日手算黃金帳務重播；`offline-dry-run` 是因子/排名/成本Optimizer/型別MOCK決策/D-Plan/執行/NAV/帳簿接續的完整四日合成管線。兩者都不是 Gemini 真實驗收。`backtest/compare` 預設嚴格模式因缺官方證據回報 BLOCKED；顯式研究模式才執行條件式回測。
+walk-forward 實際執行每個訓練/驗證/測試區間，固定參數、不用最終測試調參；各區間從初始現金獨立開始，保留失敗與部分結果。訓練初始21交易日作暖機。
+`compliance` 是 `validate-dplan` 別名，可用 `--settled-input` 提供含 state、previous_nav、previous_closes、cutoff 的本地JSON以檢查機械數量；提供檔案不等於官方來源已認證。
+`decide` 與 `generate-dplan` 是完整 `dry-run` 別名，不允許跳過自主決策與驗證生成正式訂單。
+既有 `python -m src.data.cli` 的下載、更新、品質與查詢功能保持相容。
+
+顯式允許真實 Gemini 與 MCP（消耗 API 額度）：
+
+```powershell
+# 先確認 .env 有本人的有效Key；不用把Key貼到終端指令。
+if (-not (Test-Path research_agent/.env)) { Copy-Item research_agent/.env.example research_agent/.env }
+notepad research_agent/.env
+# 若使用 cmd / Anaconda Prompt，複製指令改為：copy research_agent\.env.example research_agent\.env
+$env:GEMINI_MODEL = 'gemini-3.1-flash-lite' # 本次實際可用；以帳號當下模型為準
+python -m src.pipeline.cli dry-run --live --trade-date 2026-10-27 --as-of '2026-10-27T08:30:00+08:00' --initial --output outputs/competition-dry-run
+# 已有部位時用 --state 本地已結算帳本.json 取代 --initial，絕不自動假設初始帳戶。
+$env:RUN_LIVE_E2E = '1'
+python -m pytest tests/test_live.py::test_live_research -q
+Remove-Item Env:RUN_LIVE_E2E
+python -m src.pipeline.cli strategy-document --live --output outputs/strategy-document
+adk web
+```
+
+Investment Agent 是 CLI 的獨立自主決策流程，`adk web` 仍選 `research_agent` 做研究。
+複製`.env`只在檔案不存在時執行，避免覆蓋有效Key。環境變數優先於`.env`、再優先於YAML預設。
+策略文件需使用主辦方原始繳交DOCX放在 `docs/official`，其SHA256在manifest；未提供時清楚阻擋。
+CLI填完Word會回報 VISUAL_QA_REQUIRED，不自行宣稱版面驗收或重新凍結。已有本次QA報告見 reports。
+
+### 驗收限制與後续工作
+
+本次離線測試、實際自主Agent決策、合成重播與條件式回測皆有不同證據，不能互相替代。
+歷史資料來源遵守 TWSE/TPEx 官方API優先、FinMind授權備援；ToAlpha只做Research，不批次建立歷史庫。
+未來需補全公司行動與歷史公布時點、官方30ETF逐日持股、Active Share口徑、官方帳本、費稅取整、缺價處理及首日提交說明，才能解除正式READY阻擋。
+2026-10-26官方行事曆休市，競賽期間實際有24交易日、首個交易日10/27；尚未將此差異當成主辦方正式更正。
+無任何真實券商下單、競賽平台上傳、信用交易或自動合併main。不要把改旗標當成完成資料驗證。
+詳細操作、规则、資料假設、策略驗證與Agent設計見 docs 中的專題文件。
+
+新run保存輸入、設定、捕捉決策與重播manifest。`replay-decision` 不重新呼叫模型，檢查實際來源/設定版本與檔案hash，再比較Optimizer、完整D-Plan bytes及驗證。可提供 `--expected-manifest-sha256`；本機hash不是外部來源認證。缺上下文的舊trace或來源版本改變不猜測重播，回報BLOCKED；REPRODUCED也不把原草稿提升成READY。分階段工程驗收見 `reports/phase3_acceptance.md` 至 `phase7_acceptance.md` 及 `end_to_end_readiness.md`。
+
+`ActiveShareCalculator.evaluate()` 逐一輸出官方30檔ETF的持股時點、可得時間、來源、方法、Active Share及缺漏原因。缺失持股不補零；方法未確認不回報合規通過。Optimizer 有提供結構化基準資料時會檢查，資料不足時仍保留研究提案但正式就緒維持 BLOCKED。
+`ActiveShareValidator.validate()` 使用競賽交易日集合、同日可得基準和前日已驗證計數；跳日、重跑、缺前日證據或拿舊持股判斷新交易日都不能更新正式計數。這項獨立檢查不替代官方結算對帳。
+模擬器可接收 `benchmark_snapshots`、`benchmark_cutoff` 與 `active_share_method`，由當日NAV權重重新計算；正式檢查不接受單純AS數值字典。帳簿另存 `active_share_last_date`，交易日期推進不代表AS已驗證；缺證據的研究日不能接成連續違規。交易回滾後使用实际保留部位的AS計數，原輸入帳簿不被修改。
+產業集中度只使用截止前可得、來源明確的分類；未知分類另外列出。產業35%是內部警示，並非主辦方法定限制。

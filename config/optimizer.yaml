@@ -1,0 +1,16 @@
+version: cost-aware-lot-search-1.0
+holdings: 20
+turnover_cap: '0.15'
+no_trade_band: '0.005'
+minimum_alpha_advantage: '0.25'
+cost_penalty: '1'
+buy_stress: '0.05'
+sell_stress: '0.05'
+max_repairs: 12
+active_share_safety_threshold: '0.25'
+sector_warning_threshold: '0.35'
+benchmark_max_age_days: 7
+notes:
+  - 首日建立部位豁免周轉率上限；此後以買賣總金額除前日 NAV 計算。
+  - 修正提案須返回 Agent 確認，不得偷偷改變其投資決策。
+  - 均權只是透明基準；正式提案由 Investment Agent 選股及配置。

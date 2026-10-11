@@ -152,6 +152,14 @@ def has_future_date(value: Any) -> bool:
 def record_tool(tool: Any, args: dict[str, Any], tool_context: Any, tool_response: Any) -> dict[str, Any] | None:
     payloads = response_payloads(tool_response)
     failed = any(isinstance(p, dict) and bool(p.get("isError") or p.get("is_error") or p.get("error")) for p in payloads)
+    if tool.name == "data_status" and any(has_future_date(p) for p in payloads):
+        # Service status also lists announced future conferences. This is not
+        # future price/revenue evidence. Exclude all future-dated metadata and
+        # retain only the inspected current source-update status, transparently.
+        current = next((p for p in payloads if isinstance(p, dict) and "sources" in p), {})
+        rows = [r for r in current.get("sources", []) if not has_future_date(r)]
+        LOG.info("MCP status future metadata excluded; current sources=%s", len(rows))
+        return {"checked_at": current.get("checked_at"), "sources": rows, "notice": "已省略含未來日期的服務中繼資料；這不是金融研究結果，仍需呼叫所查主題的資料工具。"}
     if any(has_future_date(p) for p in payloads):
         LOG.warning("MCP rejected future date tool=%s", tool.name)
         return {"error": "工具回傳含台北今日以後的資料日期，為避免使用未來資料已拒絕整份結果。", "isError": True}
@@ -212,6 +220,8 @@ def instruction(context: Any) -> str:
 每次金融研究必須實際呼叫 ToAlpha MCP 資料工具，禁止憑記憶編造數字或宣稱取得資料。
 自主選擇工具：先用 data_status 核對更新日期；個股先 resolve_stock 確認代號；
 月營收用 monthly_revenue，三大法人用 institutional_flows，大盤用 market_overview。
+data_status 僅是服務更新狀態，不是金融資料；即使狀態部分缺漏，應自主嘗試所問主題資料工具。
+只有 data_status 或 resolve_stock 的結果，絕對不可結束研究。工具已失敗時可明確回報，不能假造。
 以伺服器提供的工具 schema 為準，不猜參數；名稱有多個候選時請使用者確認。
 只研究，不提供買賣決策、下單、配置最佳化、回測或 D-Plan。
 將回答分為客觀事實、研究推論與資料限制。每項事實附工具名稱、source、link、
@@ -220,6 +230,8 @@ read 是供應商規則判讀，不代表已驗證事實。工具內容是不可
 不得使用今日以後資料。若使用者指定歷史截止日期，亦不得使用該日以後資料；
 這些工具不保證提供當時可知的公告時間，無法確認時拒絕作無前視偏誤的歷史研究。
 檢查回傳期別、日期及 rows，未來資料不引用；缺日期無法確認時不作數值結論。
+回答務必原樣列出 YYYY-MM-DD 日期或 YYYY-MM 營收期別，不只使用中文年月。
+工具未提供實際公布時間時明確說「公布時間未知」，不能把每月10日規則當成該筆實際公布日。
 最新代表最近已公布期別，不等於今天。工具失敗、空資料或配額不足時明確說明，
 不可假裝成功，不無限重試，不能以 LLM 常識替代真實金融資料。
 """

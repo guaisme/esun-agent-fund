@@ -1,0 +1,15 @@
+model_env: GEMINI_MODEL
+default_model: gemini-2.5-flash
+prompt_version: investment-prompt-1.0
+max_decision_revisions: 2
+max_tool_calls: 20
+max_retries: 3
+initial_backoff: 2
+max_backoff: 15
+request_timeout: 60
+tool_timeout: 30
+task_deadline: 240
+notes:
+  - SDK attempts=1，重試由共用 reliability 層負責。
+  - 資料及決策工具唯讀，不可接触交易執行資料。
+  - 未取得有效決策時回報 FAILED，不自動套用示範組合。
