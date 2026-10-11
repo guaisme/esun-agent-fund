@@ -83,6 +83,7 @@ def code_fingerprint(root: Path = ROOT) -> dict:
             *root.glob("config/*.yaml"),
             *root.glob("config/*.json"),
             *root.glob("config/*.csv"),
+            *root.glob("scripts/*.ps1"),
             root / "requirements.txt",
             root / "docs/official/D-Plan.schema_v4.2.json",
         }

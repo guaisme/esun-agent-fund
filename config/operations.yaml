@@ -1,0 +1,10 @@
+# 開發預設；主辦方窗口未確認，禁止自動產生 READY。
+timezone: Asia/Taipei
+scheduled_time: '07:00'
+decision_cutoff: '08:30'
+submission_open: null
+submission_close: null
+submission_window_source: null
+overall_deadline_seconds: 900
+download_lookback_calendar_days: 240
+# 沒有完整隔夜市場資料 adapter 時需在每日報告明確列出缺口。

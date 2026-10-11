@@ -17,3 +17,14 @@
 正式競賽就緒為BLOCKED：官方持股與Active Share口徑、公司行動/PIT完整性、官方已結算帳本、費稅取整/缺價規則、首日提交與TPEx日曆證據未完全驗證。程式不能用修改旗標或假資料繞過。
 
 GitHub目的地已透過官方connector核對：repository ID1413519474，owner與authenticated user ID一致，使用者有admin/push權限。自動核准審查仍拒絕發布詳細金融資料，已縮限為工程交付；原始證據未刪除、未改經其他管道發布。
+# Phase 8／9 更新（2026-10-11）
+
+完整離線回歸實際結果：**243 passed、7 skipped、4 warnings，82.25秒**。既有209項及原Research15項仍通過。新增34項離線Daily/鎖/恢復/期限/時區/資料缺漏/通知/Benchmark/MCP證據與24日測試；新增Live daily為第7項skip，沒有消耗API額度或冒稱Live成功。
+
+24日CLI合成風險情境（risk-off/risk-on/risk-off）已實際執行，150檔因子與排名、20檔持股、首日建立／後續加碼／減碼、D-Plan／驗證／NAV／帳簿接續通過，正式readiness仍BLOCKED。資料與模型都是MOCK，詳細產物只留本機。初次候選超限與另一中性情境被Optimizer阻擋的失敗紀錄未刪除，沒有放寬Optimizer或正式規則。
+
+實際執行官方TWSE2026日曆下載、原回應hash、session-quality、非競賽期間每日預檢和同日重啟拒絕、PowerShell三腳本解析及安裝-DryRun。沒有實際安裝持續排程、睡眠／重啟測試或最新版本Live daily。TPEx官方頁本次403，保留獨立日曆未驗證。30ETF完整持股接受數0，逐檔缺漏欄位/截止時間回報。
+
+排程／營運原始輸出與Live金融紀錄不加入Git；只交付source、MOCK測試與工程文件。實際派送使用以feature/phase3-7-integrated為基底的新分支與Draft PR，沒有合併main。
+
+最後將排程腳本納入來源指紋並支援 OperationsFile 後，另執行受影響測試：54 passed、1 deselected、2 warnings（14.91秒）；未把此批當成第二次完整243項回歸。PowerShell解析與安裝DryRun亦重驗通過。
