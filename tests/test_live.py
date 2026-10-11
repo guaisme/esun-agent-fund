@@ -33,7 +33,10 @@ CASES = [
 def test_live_research(case, prompt, required):
     if os.getenv("RUN_LIVE_E2E") != "1":
         pytest.skip("Enable RUN_LIVE_E2E=1; consumes Gemini quota")
-    if not os.getenv("GOOGLE_API_KEY") or os.getenv("GOOGLE_API_KEY") == "YOUR_API_KEY_HERE":
+    if (
+        not os.getenv("GOOGLE_API_KEY")
+        or os.getenv("GOOGLE_API_KEY") == "YOUR_API_KEY_HERE"
+    ):
         pytest.skip("Missing Gemini API key")
     asyncio.run(run_case(case, prompt, required))
 
@@ -67,7 +70,10 @@ async def run_case(case: str, prompt: str, required: str):
                         calls.append(part.function_call.name)
                     if part.function_response:
                         responses.append(
-                            (part.function_response.name, part.function_response.response)
+                            (
+                                part.function_response.name,
+                                part.function_response.response,
+                            )
                         )
                 if event.is_final_response():
                     final = "".join(
@@ -95,12 +101,15 @@ async def run_case(case: str, prompt: str, required: str):
         from research_agent.agent import redact
 
         (out / (case + ".json")).write_text(
-            redact(json.dumps(report, ensure_ascii=False, indent=2, default=str)), encoding="utf-8"
+            redact(json.dumps(report, ensure_ascii=False, indent=2, default=str)),
+            encoding="utf-8",
         )
         await runner.close()
 
 
-def validate_live_evidence(calls: list, responses: list, final: str, required: str) -> None:
+def validate_live_evidence(
+    calls: list, responses: list, final: str, required: str
+) -> None:
     """Validate real or synthetic protocol shape; not a full semantic fact checker."""
     from research_agent.agent import response_payloads, has_future_date
 
@@ -114,7 +123,11 @@ def validate_live_evidence(calls: list, responses: list, final: str, required: s
         and not p.get("error")
     ]
     dates = sorted(
-        set(re.findall(r"\b\d{4}-\d{2}(?:-\d{2})?\b", json.dumps(finance, ensure_ascii=False)))
+        set(
+            re.findall(
+                r"\b\d{4}-\d{2}(?:-\d{2})?\b", json.dumps(finance, ensure_ascii=False)
+            )
+        )
     )
     assert required in calls, "Gemini did not call required MCP tool"
     assert finance, "MCP did not return inspectable real dated financial data"
@@ -131,8 +144,12 @@ def validate_live_evidence(calls: list, responses: list, final: str, required: s
             "本次研究未完成",
         ]
     ), final
-    assert any(d in final for d in dates), "Final answer does not cite returned data date"
-    assert re.search(r"來源|ToAlpha|TWSE|TPEx|證交|櫃買", final), "Missing source attribution"
+    assert any(
+        d in final for d in dates
+    ), "Final answer does not cite returned data date"
+    from src.pipeline.research_validation import has_source_attribution
+
+    assert has_source_attribution(final, finance), "Missing source attribution"
     # Semantic correctness, Traditional Chinese usage, and every quoted number
     # still require human comparison with returned payloads. Do not claim these
     # automated checks prove full absence of hallucination.
@@ -150,7 +167,10 @@ def test_official_provider_live(tmp_path):
 
     client = HttpClient(tmp_path / "real-raw", interval=2)
     universe = UniverseLoader()
-    for provider, ticker in [(TWSEProvider(client), "2330"), (TPExProvider(client), "5274")]:
+    for provider, ticker in [
+        (TWSEProvider(client), "2330"),
+        (TPExProvider(client), "5274"),
+    ]:
         for dataset in ["prices", "flows"]:
             rows = [
                 r
@@ -162,7 +182,8 @@ def test_official_provider_live(tmp_path):
                 for i in DataQualityValidator(universe).validate(rows, dataset)
             )
             assert all(
-                r["source"] == provider.name and r["trade_date"] == "2026-09-30" for r in rows
+                r["source"] == provider.name and r["trade_date"] == "2026-09-30"
+                for r in rows
             )
 
 
@@ -178,7 +199,9 @@ def test_nested_market_dates_mock_schema():
                         {
                             "text": json.dumps(
                                 {
-                                    "index": {"MOCK": {"as_of": "2025-03-10", "close": 123}},
+                                    "index": {
+                                        "MOCK": {"as_of": "2025-03-10", "close": 123}
+                                    },
                                     "source": "MOCK",
                                 }
                             )

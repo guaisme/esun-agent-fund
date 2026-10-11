@@ -28,3 +28,7 @@ GitHub目的地已透過官方connector核對：repository ID1413519474，owner�
 排程／營運原始輸出與Live金融紀錄不加入Git；只交付source、MOCK測試與工程文件。實際派送使用以feature/phase3-7-integrated為基底的新分支與Draft PR，沒有合併main。
 
 最後將排程腳本納入來源指紋並支援 OperationsFile 後，另執行受影響測試：54 passed、1 deselected、2 warnings（14.91秒）；未把此批當成第二次完整243項回歸。PowerShell解析與安裝DryRun亦重驗通過。
+
+## 競賽前演練與Research來源修正
+
+完整回歸264 passed、8 skipped、4 warnings（51.80秒）；最後CLI摘要／演練上下文更新後，受影響測試25 passed、5 skipped、2 warnings（4.53秒）。既有三份Research JSON重驗自動檢查通過，沒有新API呼叫或修改原FAILED。最新rehearsal-run Live仍NOT TESTED，正式提交永遠BLOCKED。詳細見reports/rehearsal_acceptance.md。

@@ -469,3 +469,7 @@ python -m pytest -q
 排程先用 `./scripts/Install-DailyTask.ps1 -PythonExe (Get-Command python).Source -DryRun` 檢查；拿掉-DryRun才註冊。移除用 `./scripts/Remove-DailyTask.ps1`。預設非Live、目前登入使用者、台北系統時區，不儲存密碼、不改Conda或Windows時區。排程失敗、睡眠／關機／重啟與恢復限制見操作文件。
 
 新增session-quality依已保存官方TWSE日曆區分休市、缺股與衝突；TPEx獨立日曆仍未驗證，不覆寫歷史狀態與公布時間。ETF持股有可替換的審閱檔案Adapter，缺30檔實際完整持股時逐檔回報，不補零。隔夜美股Adapter、公司行動完整覆蓋、正式結算真實性、官方Active Share／費稅／首日／截止口徑仍是缺口。
+
+## 競賽前真實 API 工程演練
+
+新增 `rehearsal-run --live`，串接真實本地資料、MCP市場證據、Gemini投資決策、既有Optimizer與D-Plan，獨立保存演練audit，正式提交永遠BLOCKED。不改daily-run期間／期限／規則，也不接受指定未來日期。詳見 [演練操作指南](docs/precompetition_rehearsal.md)。Research來源驗證改為比對工具回傳的來源／連結，接受source與完整機構名稱，不接受僅有空泛標籤。法人五日逐日明細不足仍未解決。

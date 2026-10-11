@@ -36,6 +36,19 @@ def parser() -> argparse.ArgumentParser:
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("universe")
     commands.add_parser("availability")
+    rehearsal = commands.add_parser(
+        "rehearsal-run", help="Explicit live engineering rehearsal; never submittable"
+    )
+    rehearsal.add_argument("--live", action="store_true")
+    rehearsal.add_argument("--calendar", type=Path, required=True)
+    rehearsal.add_argument("--benchmarks", type=Path)
+    rehearsal_inventory = rehearsal.add_mutually_exclusive_group(required=True)
+    rehearsal_inventory.add_argument(
+        "--initial", action="store_true", help="Unsettled research-only initial cash"
+    )
+    rehearsal_inventory.add_argument("--state", type=Path)
+    rehearsal.add_argument("--rerun", action="store_true")
+    rehearsal.add_argument("--output", type=Path, default=ROOT / "outputs/rehearsals")
     calendar = commands.add_parser("calendar-refresh")
     calendar.add_argument("--year", type=int, required=True)
     daily = commands.add_parser("daily-run")
@@ -204,7 +217,37 @@ def main(argv: list[str] | None = None) -> int:
         "generate-dplan": "dry-run",
     }.get(args.command, args.command)
     settings = load_settings()
-    if args.command == "daily-run":
+    if args.command == "rehearsal-run":
+        from .rehearsal import rehearsal_run
+
+        result = rehearsal_run(args)
+        summary_keys = (
+            "run_id",
+            "run_directory",
+            "execution_status",
+            "submission_status",
+            "data_cutoff",
+            "previous_session",
+            "previous_session_missing_tickers",
+            "gemini",
+            "schema",
+            "semantics",
+            "rehearsal_checks_passed",
+            "holdings",
+            "cash_ratio",
+            "dplan_audit_path",
+            "errors",
+            "warnings",
+        )
+        print(
+            json.dumps(
+                json_value({k: result[k] for k in summary_keys if k in result}),
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1 if result["execution_status"] == "FAILED" else 2
+    elif args.command == "daily-run":
         from .daily import daily_run
 
         if args.state and args.initial:
