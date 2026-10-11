@@ -29,18 +29,33 @@ def load_local(root: Path) -> dict[str, list[dict]]:
 
 
 def parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser(description="玉山競賽：本地資料、研究回測與受控 dry-run")
+    result = argparse.ArgumentParser(
+        description="玉山競賽：本地資料、研究回測與受控 dry-run"
+    )
     result.add_argument("--data-root", type=Path, default=ROOT / "data")
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("universe")
     commands.add_parser("availability")
     offline = commands.add_parser("offline-dry-run")
-    offline.add_argument("--output", type=Path, default=ROOT / "outputs/offline-decision-pipeline")
+    offline.add_argument(
+        "--output", type=Path, default=ROOT / "outputs/offline-decision-pipeline"
+    )
+    replay = commands.add_parser(
+        "replay-decision",
+        help="Verify saved inputs and regenerate an identical plan without model/API calls",
+    )
+    replay.add_argument("run_directory", type=Path)
+    replay.add_argument("--expected-manifest-sha256")
+    replay.add_argument(
+        "--output", type=Path, default=ROOT / "outputs/decision-replay-report.json"
+    )
     simulation = commands.add_parser("simulate")
     simulation.add_argument(
         "--fixture", type=Path, default=ROOT / "tests/fixtures/competition_case.json"
     )
-    simulation.add_argument("--output", type=Path, default=ROOT / "outputs/offline-replay")
+    simulation.add_argument(
+        "--output", type=Path, default=ROOT / "outputs/offline-replay"
+    )
     feature = commands.add_parser("features")
     feature.add_argument("--as-of", required=True)
     feature.add_argument(
@@ -54,22 +69,34 @@ def parser() -> argparse.ArgumentParser:
         backtest.add_argument("--start", required=True)
         backtest.add_argument("--end", required=True)
         backtest.add_argument(
-            "--mode", choices=["strict_verified", "research_assumptions"], default="strict_verified"
+            "--mode",
+            choices=["strict_verified", "research_assumptions"],
+            default="strict_verified",
         )
         backtest.add_argument(
-            "--baseline", choices=["equal_weight", "momentum", "multifactor"], default="multifactor"
+            "--baseline",
+            choices=["equal_weight", "momentum", "multifactor"],
+            default="multifactor",
         )
-        backtest.add_argument("--holdings", type=int, choices=[20, 22, 25, 30], default=20)
+        backtest.add_argument(
+            "--holdings", type=int, choices=[20, 22, 25, 30], default=20
+        )
         backtest.add_argument("--output", type=Path, default=ROOT / "outputs/backtest")
     evaluation = commands.add_parser("walk-forward")
     evaluation.add_argument(
-        "--mode", choices=["strict_verified", "research_assumptions"], default="strict_verified"
+        "--mode",
+        choices=["strict_verified", "research_assumptions"],
+        default="strict_verified",
     )
     evaluation.add_argument("--rolling", action="store_true")
-    evaluation.add_argument("--output", type=Path, default=ROOT / "outputs/walk-forward.json")
+    evaluation.add_argument(
+        "--output", type=Path, default=ROOT / "outputs/walk-forward.json"
+    )
     declaration = commands.add_parser("strategy-document")
     declaration.add_argument("--live", action="store_true")
-    declaration.add_argument("--output", type=Path, default=ROOT / "outputs/strategy-document")
+    declaration.add_argument(
+        "--output", type=Path, default=ROOT / "outputs/strategy-document"
+    )
     validation = commands.add_parser("validate-dplan", aliases=["compliance"])
     validation.add_argument("file", type=Path)
     validation.add_argument(
@@ -77,22 +104,30 @@ def parser() -> argparse.ArgumentParser:
         type=Path,
         help="JSON with state, previous_nav, previous_closes and cutoff; not authentication proof",
     )
-    validation.add_argument("--output", type=Path, default=ROOT / "outputs/dplan-validation.json")
+    validation.add_argument(
+        "--output", type=Path, default=ROOT / "outputs/dplan-validation.json"
+    )
     live = commands.add_parser("dry-run", aliases=["decide", "generate-dplan"])
     live.add_argument("--trade-date", required=True)
     live.add_argument("--as-of", required=True)
     live.add_argument(
-        "--mode", choices=["strict_verified", "research_assumptions"], default="strict_verified"
+        "--mode",
+        choices=["strict_verified", "research_assumptions"],
+        default="strict_verified",
     )
     live.add_argument(
         "--live", action="store_true", help="Explicitly enables billable Gemini calls"
     )
     inventory = live.add_mutually_exclusive_group(required=True)
     inventory.add_argument(
-        "--initial", action="store_true", help="Explicit preinvestment initial cash ledger"
+        "--initial",
+        action="store_true",
+        help="Explicit preinvestment initial cash ledger",
     )
     inventory.add_argument("--state", type=Path, help="Saved settled inventory ledger")
-    live.add_argument("--output", type=Path, default=ROOT / "outputs/competition-dry-run")
+    live.add_argument(
+        "--output", type=Path, default=ROOT / "outputs/competition-dry-run"
+    )
     return result
 
 
@@ -114,7 +149,9 @@ def write_backtest(report: dict, directory: Path, label: str) -> None:
         for key, value in metrics.items()
         if not isinstance(value, (list, dict))
     ]
-    markdown += ["", "## 限制", ""] + [f"- {text}" for text in report.get("limitations", [])]
+    markdown += ["", "## 限制", ""] + [
+        f"- {text}" for text in report.get("limitations", [])
+    ]
     (directory / f"{label}.md").write_text("\n".join(markdown) + "\n", encoding="utf-8")
 
 
@@ -143,17 +180,29 @@ def main(argv: list[str] | None = None) -> int:
         result = replay_fixture(args.fixture, args.output)
         write_json(args.output / "replay.json", result)
         result = {
-            key: value for key, value in result.items() if key not in {"history", "final_state"}
+            key: value
+            for key, value in result.items()
+            if key not in {"history", "final_state"}
         }
+    elif args.command == "replay-decision":
+        from .replay import replay_decision
+
+        result = replay_decision(
+            args.run_directory, expected_manifest_sha256=args.expected_manifest_sha256
+        )
+        write_json(args.output, result)
     elif args.command == "validate-dplan":
         plan = json.loads(
-            args.file.read_text(encoding="utf-8"), parse_float=__import__("decimal").Decimal
+            args.file.read_text(encoding="utf-8"),
+            parse_float=__import__("decimal").Decimal,
         )
         inputs = {}
         if args.settled_input:
             from decimal import Decimal
 
-            values = json.loads(args.settled_input.read_text(encoding="utf-8"), parse_float=Decimal)
+            values = json.loads(
+                args.settled_input.read_text(encoding="utf-8"), parse_float=Decimal
+            )
             inputs = {
                 "state": load_state(values["state"]),
                 "previous_nav": Decimal(str(values["previous_nav"])),
@@ -214,12 +263,18 @@ def main(argv: list[str] | None = None) -> int:
                 from src.agent.declaration import generate_strategy_declaration
                 from src.dplan.strategy_document import fill_official_template
 
-                declaration, trace = asyncio.run(generate_strategy_declaration(settings))
+                declaration, trace = asyncio.run(
+                    generate_strategy_declaration(settings)
+                )
                 write_json(args.output / "agent-trace.json", trace)
                 result = {"status": trace["status"]}
                 if declaration:
-                    write_json(args.output / "declaration.json", declaration.model_dump())
-                    template = next((ROOT / "docs/official").glob("*繳交格式*.docx"), None)
+                    write_json(
+                        args.output / "declaration.json", declaration.model_dump()
+                    )
+                    template = next(
+                        (ROOT / "docs/official").glob("*繳交格式*.docx"), None
+                    )
                     if template is None:
                         result = {
                             "status": "BLOCKED",
@@ -256,20 +311,32 @@ def main(argv: list[str] | None = None) -> int:
                     availability=replace(settings.availability, mode=args.mode),
                     alpha=settings.alpha,
                 )
-                report = asyncio.run(competition_dry_run(context, settings, args.output))
+                report = asyncio.run(
+                    competition_dry_run(context, settings, args.output)
+                )
                 result = {
                     key: value
                     for key, value in report.items()
-                    if key not in {"attempts", "agent_decision", "optimizer", "code_fingerprint"}
+                    if key
+                    not in {
+                        "attempts",
+                        "agent_decision",
+                        "optimizer",
+                        "code_fingerprint",
+                    }
                 }
         elif args.command == "features":
-            snapshot = FeatureEngine(replace(settings.availability, mode=args.mode)).build(
-                **data, cutoff=args.as_of
-            )
+            snapshot = FeatureEngine(
+                replace(settings.availability, mode=args.mode)
+            ).build(**data, cutoff=args.as_of)
             ranking = AlphaModel(settings.alpha).rank(snapshot)
             write_json(
                 args.output,
-                {"snapshot": snapshot, "ranking": ranking, "code_fingerprint": code_fingerprint()},
+                {
+                    "snapshot": snapshot,
+                    "ranking": ranking,
+                    "code_fingerprint": code_fingerprint(),
+                },
             )
             result = {
                 "mode": args.mode,
@@ -325,6 +392,8 @@ def main(argv: list[str] | None = None) -> int:
                 "evaluation_policy": result["evaluation_policy"],
             }
     print(json.dumps(json_value(result), ensure_ascii=True, indent=2, allow_nan=False))
+    if args.command == "replay-decision":
+        return {"REPRODUCED": 0, "BLOCKED": 2}.get(result["status"], 1)
     return 0
 
 

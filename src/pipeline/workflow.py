@@ -151,28 +151,8 @@ async def _competition_dry_run(
         "code_version": version["code_version"],
         "tool_use_count": len(trace.get("tool_calls", [])),
     }
-    plan = DPlanGenerator(settings.policy).generate(
-        team_id=settings.competition["team_id"],
-        trade_date=context.trade_date,
-        state=context.state,
-        previous_nav=context.previous_nav,
-        previous_closes=context.previous_closes,
-        targets=decision.target_weights,
-        sources=context.sources,
-        observations=context.observations,
-        market_view={
-            "basis_refs": decision.observation_refs,
-            "logic": decision.market_logic,
-            "regime": decision.regime,
-            "stance": decision.stance,
-            "posture": {
-                "net_exposure_intent": decision.investment_posture,
-                "target_cash_pct_range": list(decision.cash_range),
-            },
-            "counter_evidence": decision.counter_evidence,
-        },
-        rationale={t: r.model_dump() for t, r in decision.rationale.items()},
-        metadata=metadata,
+    plan = DPlanGenerator(settings.policy).from_decision(
+        context, decision, team_id=settings.competition["team_id"], metadata=metadata
     )
     validator = DPlanValidator(policy=settings.policy, costs=settings.costs)
     validation = validator.validate(
@@ -229,6 +209,22 @@ async def _competition_dry_run(
         "optimizer": proposal,
         "code_fingerprint": version,
     }
+    if plan_path is not None:
+        from .replay import save_decision_replay
+
+        result["replay_manifest"] = save_decision_replay(
+            output,
+            context=context,
+            settings=settings,
+            decision=decision,
+            trace=trace,
+            plan_path=plan_path,
+            proposal=proposal,
+            validation=validation,
+            readiness=evidence,
+            trading_days=trading_days,
+            original_status=result["status"],
+        )
     write_json(output / "readiness.json", result)
     return result
 

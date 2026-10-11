@@ -112,7 +112,7 @@ def calculate_active_share(
         sum(
             (
                 abs(left.get(ticker, Decimal(0)) - right.get(ticker, Decimal(0)))
-                for ticker in set(left) | set(right)
+                for ticker in sorted(set(left) | set(right))
             ),
             Decimal(0),
         )

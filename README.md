@@ -395,6 +395,7 @@ python -m src.pipeline.cli universe
 python -m src.pipeline.cli availability
 python -m src.pipeline.cli simulate --output outputs/offline-replay
 python -m src.pipeline.cli offline-dry-run --output outputs/offline-decision-pipeline
+python -m src.pipeline.cli replay-decision outputs/offline-decision-pipeline/2026-10-27 --output outputs/replay-check.json
 python -m src.pipeline.cli features --as-of '2026-10-12T08:30:00+08:00' --output outputs/features.json
 python -m src.pipeline.cli backtest --start 2026-09-03 --end 2026-10-08 --mode research_assumptions
 python -m src.pipeline.cli compare --start 2026-09-03 --end 2026-10-08 --mode research_assumptions --output outputs/comparison
@@ -441,6 +442,8 @@ CLI填完Word會回報 VISUAL_QA_REQUIRED，不自行宣稱版面驗收或重新
 2026-10-26官方行事曆休市，競賽期間實際有24交易日、首個交易日10/27；尚未將此差異當成主辦方正式更正。
 無任何真實券商下單、競賽平台上傳、信用交易或自動合併main。不要把改旗標當成完成資料驗證。
 詳細操作、规则、資料假設、策略驗證與Agent設計見 docs 中的專題文件。
+
+新run保存輸入、設定、捕捉決策與重播manifest。`replay-decision` 不重新呼叫模型，檢查實際來源/設定版本與檔案hash，再比較Optimizer、完整D-Plan bytes及驗證。可提供 `--expected-manifest-sha256`；本機hash不是外部來源認證。缺上下文的舊trace或來源版本改變不猜測重播，回報BLOCKED；REPRODUCED也不把原草稿提升成READY。分階段工程驗收見 `reports/phase3_acceptance.md` 至 `phase7_acceptance.md` 及 `end_to_end_readiness.md`。
 
 `ActiveShareCalculator.evaluate()` 逐一輸出官方30檔ETF的持股時點、可得時間、來源、方法、Active Share及缺漏原因。缺失持股不補零；方法未確認不回報合規通過。Optimizer 有提供結構化基準資料時會檢查，資料不足時仍保留研究提案但正式就緒維持 BLOCKED。
 `ActiveShareValidator.validate()` 使用競賽交易日集合、同日可得基準和前日已驗證計數；跳日、重跑、缺前日證據或拿舊持股判斷新交易日都不能更新正式計數。這項獨立檢查不替代官方結算對帳。
