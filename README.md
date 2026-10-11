@@ -441,7 +441,7 @@ CLI填完Word會回報 VISUAL_QA_REQUIRED，不自行宣稱版面驗收或重新
 未來需補全公司行動與歷史公布時點、官方30ETF逐日持股、Active Share口徑、官方帳本、費稅取整、缺價處理及首日提交說明，才能解除正式READY阻擋。
 2026-10-26官方行事曆休市，競賽期間實際有24交易日、首個交易日10/27；尚未將此差異當成主辦方正式更正。
 無任何真實券商下單、競賽平台上傳、信用交易或自動合併main。不要把改旗標當成完成資料驗證。
-詳細操作、规则、資料假設、策略驗證與Agent設計見 docs 中的專題文件。
+詳細操作、規則、資料假設、策略驗證與Agent設計見 docs 中的專題文件。
 
 新run保存輸入、設定、捕捉決策與重播manifest。`replay-decision` 不重新呼叫模型，檢查實際來源/設定版本與檔案hash，再比較Optimizer、完整D-Plan bytes及驗證。可提供 `--expected-manifest-sha256`；本機hash不是外部來源認證。缺上下文的舊trace或來源版本改變不猜測重播，回報BLOCKED；REPRODUCED也不把原草稿提升成READY。分階段工程驗收見 `reports/phase3_acceptance.md` 至 `phase7_acceptance.md` 及 `end_to_end_readiness.md`。
 
@@ -449,3 +449,23 @@ CLI填完Word會回報 VISUAL_QA_REQUIRED，不自行宣稱版面驗收或重新
 `ActiveShareValidator.validate()` 使用競賽交易日集合、同日可得基準和前日已驗證計數；跳日、重跑、缺前日證據或拿舊持股判斷新交易日都不能更新正式計數。這項獨立檢查不替代官方結算對帳。
 模擬器可接收 `benchmark_snapshots`、`benchmark_cutoff` 與 `active_share_method`，由當日NAV權重重新計算；正式檢查不接受單純AS數值字典。帳簿另存 `active_share_last_date`，交易日期推進不代表AS已驗證；缺證據的研究日不能接成連續違規。交易回滾後使用实际保留部位的AS計數，原輸入帳簿不被修改。
 產業集中度只使用截止前可得、來源明確的分類；未知分類另外列出。產業35%是內部警示，並非主辦方法定限制。
+# Phase 8／9 每日執行與驗收
+
+本次延續 `feature/phase3-7-integrated` 的45caf06，新增每日Runner、OS防重複鎖、Run ID、階段恢復、輸入／輸出hash、截止檢查、本機通知、Windows排程腳本、24日明確合成驗收。**正式參賽仍為BLOCKED**，不是把已實作等同於正式驗收成功。
+
+完整指令與故障處理見 [每日操作](docs/daily_operations.md)；正式缺口見 [規則缺口](docs/official_rules_gaps.md)；驗收見 [Phase 8](reports/phase8_acceptance.md)、[Phase 9](reports/phase9_acceptance.md)、[就緒狀態](reports/competition_readiness.md)。沒有新增外部券商、平台提交、LINE或Codex CLI依賴。
+
+```powershell
+conda activate esun-agent
+python -m pip install -r requirements.txt
+python -m src.pipeline.cli calendar-refresh --year 2026
+python -m src.pipeline.cli daily-run --calendar data/metadata/twse-calendar-2026.json
+python -m src.pipeline.cli offline-dry-run --sessions 24 --output outputs/offline-24
+python -m pytest -q
+```
+
+每日結果：`outputs/daily/日期/RunID/status.json`、`notification.json`、`report.md`。COMPLETED只代表執行結束；exit2和submission_status=BLOCKED不能當作可提交。一般命令不消耗Gemini額度，只有明確`--live`才啟用。官方窗口預設未知；07:00是排程建議、08:30是內部研究期限，不是假造主辦方截止。前日帳簿自動找`data/metadata/settled/日期.json`，缺少即阻擋，不能拿昨天草稿當已成交持股。
+
+排程先用 `./scripts/Install-DailyTask.ps1 -PythonExe (Get-Command python).Source -DryRun` 檢查；拿掉-DryRun才註冊。移除用 `./scripts/Remove-DailyTask.ps1`。預設非Live、目前登入使用者、台北系統時區，不儲存密碼、不改Conda或Windows時區。排程失敗、睡眠／關機／重啟與恢復限制見操作文件。
+
+新增session-quality依已保存官方TWSE日曆區分休市、缺股與衝突；TPEx獨立日曆仍未驗證，不覆寫歷史狀態與公布時間。ETF持股有可替換的審閱檔案Adapter，缺30檔實際完整持股時逐檔回報，不補零。隔夜美股Adapter、公司行動完整覆蓋、正式結算真實性、官方Active Share／費稅／首日／截止口徑仍是缺口。

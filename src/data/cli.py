@@ -21,7 +21,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--data-dir", type=Path, default=ROOT / "data")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("universe")
-    for name in ["download", "flows", "revenue", "query", "quality"]:
+    for name in ["download", "flows", "revenue", "query", "quality", "session-quality"]:
         p = sub.add_parser(name)
         p.add_argument("--ticker")
         p.add_argument("--start")
@@ -31,17 +31,24 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--interval", type=float, default=2)
             p.add_argument("--timeout", type=float, default=20)
             p.add_argument("--max-retries", type=int, default=3)
-        if name in {"query", "quality"}:
-            p.add_argument("--dataset", choices=["prices", "flows", "revenue"], default="prices")
+        if name in {"query", "quality", "session-quality"}:
+            p.add_argument(
+                "--dataset", choices=["prices", "flows", "revenue"], default="prices"
+            )
         if name == "query":
             p.add_argument(
-                "--as-of", help="Timezone-aware ISO timestamp; strict availability filter"
+                "--as-of",
+                help="Timezone-aware ISO timestamp; strict availability filter",
             )
         if name == "quality":
             p.add_argument("--min-days", type=int, default=120)
+        if name == "session-quality":
+            p.add_argument("--calendar", type=Path, required=True)
         p.add_argument("--output", type=Path)
     a = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
+    )
     universe = UniverseLoader()
     universe.load_universe()
     if a.command == "universe":
@@ -72,13 +79,19 @@ def main(argv: list[str] | None = None) -> int:
                 refresh=a.refresh,
             )
             fallback = (
-                FinMindProvider(client, universe) if os.getenv("FINMIND_ENABLED") == "1" else None
+                FinMindProvider(client, universe)
+                if os.getenv("FINMIND_ENABLED") == "1"
+                else None
             )
             if a.command == "revenue":
                 if not a.ticker:
-                    parser.error("revenue requires --ticker (repeat per ticker under quota)")
+                    parser.error(
+                        "revenue requires --ticker (repeat per ticker under quota)"
+                    )
                 if not fallback:
-                    raise ValueError("Revenue currently requires explicit FINMIND_ENABLED=1")
+                    raise ValueError(
+                        "Revenue currently requires explicit FINMIND_ENABLED=1"
+                    )
                 rows = MonthlyRevenueProvider(fallback).get_monthly_revenue(
                     a.ticker, a.start, a.end
                 )
@@ -101,6 +114,22 @@ def main(argv: list[str] | None = None) -> int:
                 )
         elif a.command == "query":
             result = store.query(a.dataset, a.ticker, a.start, a.end, a.as_of)
+        elif a.command == "session-quality":
+            from src.pipeline.daily import read_calendar
+            from .session_quality import session_quality
+
+            if not a.start or not a.end or a.start[:4] != a.end[:4]:
+                parser.error("session-quality requires same-year --start and --end")
+            calendar = read_calendar(a.calendar, int(a.start[:4]))
+            rows = store.query(a.dataset, start=a.start, end=a.end)
+            updates = [
+                dict(market=m, date=d, status=s)
+                for m, d, s in store.db.execute(
+                    "SELECT market,day,status FROM updates WHERE dataset=? AND day>=? AND day<=?",
+                    (a.dataset, a.start, a.end),
+                )
+            ]
+            result = session_quality(rows, updates, {"TWSE": calendar})
         else:
             result = DataQualityValidator(universe).report(
                 store, a.dataset, a.start, a.end, a.min_days
@@ -120,7 +149,10 @@ def main(argv: list[str] | None = None) -> int:
                 or result.get("quality_counts", {}).get("ERROR")
                 or (
                     a.command == "quality"
-                    and (result.get("below_target") or result.get("unverified_or_failed_days"))
+                    and (
+                        result.get("below_target")
+                        or result.get("unverified_or_failed_days")
+                    )
                 )
             )
             else 0

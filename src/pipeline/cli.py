@@ -36,10 +36,51 @@ def parser() -> argparse.ArgumentParser:
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("universe")
     commands.add_parser("availability")
+    calendar = commands.add_parser("calendar-refresh")
+    calendar.add_argument("--year", type=int, required=True)
+    daily = commands.add_parser("daily-run")
+    daily.add_argument("--trade-date")
+    daily.add_argument("--operations", type=Path)
+    daily.add_argument("--calendar", type=Path)
+    daily.add_argument("--benchmarks", type=Path)
+    daily.add_argument("--state", type=Path)
+    daily.add_argument(
+        "--settlement",
+        type=Path,
+        help="Normalized organizer export with original file/hash; does not auto-certify authenticity",
+    )
+    daily.add_argument(
+        "--settled-directory",
+        type=Path,
+        help="Auto-load YYYY-MM-DD.json for previous verified TWSE session",
+    )
+    daily.add_argument("--initial", action="store_true")
+    daily.add_argument("--live", action="store_true")
+    daily.add_argument("--update-data", action="store_true")
+    daily.add_argument("--rerun", action="store_true")
+    daily.add_argument(
+        "--resume", help="Existing incomplete Run ID, never a completed run"
+    )
+    daily.add_argument("--output", type=Path, default=ROOT / "outputs/daily")
+    compare = commands.add_parser("compare-runs")
+    compare.add_argument("left", type=Path)
+    compare.add_argument("right", type=Path)
+    compare.add_argument(
+        "--output", type=Path, default=ROOT / "outputs/run-comparison.json"
+    )
+    benchmark = commands.add_parser("benchmark-status")
+    benchmark.add_argument(
+        "--directory", type=Path, default=ROOT / "data/raw/benchmarks"
+    )
+    benchmark.add_argument("--as-of", required=True)
+    benchmark.add_argument(
+        "--output", type=Path, default=ROOT / "outputs/benchmark-status.json"
+    )
     offline = commands.add_parser("offline-dry-run")
     offline.add_argument(
         "--output", type=Path, default=ROOT / "outputs/offline-decision-pipeline"
     )
+    offline.add_argument("--sessions", type=int, choices=[4, 24], default=4)
     replay = commands.add_parser(
         "replay-decision",
         help="Verify saved inputs and regenerate an identical plan without model/API calls",
@@ -163,7 +204,57 @@ def main(argv: list[str] | None = None) -> int:
         "generate-dplan": "dry-run",
     }.get(args.command, args.command)
     settings = load_settings()
-    if args.command == "universe":
+    if args.command == "daily-run":
+        from .daily import daily_run
+
+        if args.state and args.initial:
+            raise ValueError("Choose state or initial, not both")
+        if args.resume and args.rerun:
+            raise ValueError("Choose resume or rerun, not both")
+        result = daily_run(args)
+        print(json.dumps(json_value(result), ensure_ascii=False, indent=2))
+        return (
+            1
+            if result["execution_status"] == "FAILED"
+            else (0 if result["submission_status"] == "READY" else 2)
+        )
+    elif args.command == "benchmark-status":
+        from src.data.providers.benchmark import ReviewedFileBenchmarkProvider
+
+        _, result = ReviewedFileBenchmarkProvider(args.directory).load(args.as_of)
+        write_json(args.output, result)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["status"] == "COMPLETE" else 2
+    elif args.command == "calendar-refresh":
+        from src.competition.calendar import TWSECalendarProvider
+        from src.data.http import HttpClient
+
+        client = HttpClient(args.data_root / "raw", refresh=True)
+        payload, fetched, raw = client.get(
+            TWSECalendarProvider.URL,
+            {"queryYear": args.year - 1911, "response": "json"},
+        )
+        TWSECalendarProvider.parse(payload, args.year, fetched, raw)
+        out = args.data_root / "metadata" / f"twse-calendar-{args.year}.json"
+        from .run_store import sha256
+
+        write_json(
+            out,
+            {
+                "url": TWSECalendarProvider.URL,
+                "payload": payload,
+                "fetched_at": fetched,
+                "raw_ref": raw,
+                "raw_sha256": sha256(Path(raw)),
+            },
+        )
+        result = {"status": "CALENDAR_SAVED", "path": str(out), "TPEx": "UNVERIFIED"}
+    elif args.command == "compare-runs":
+        from .run_store import compare_runs
+
+        result = compare_runs(args.left, args.right)
+        write_json(args.output, result)
+    elif args.command == "universe":
         universe = UniverseLoader()
         universe.load_universe()
         result = {
@@ -175,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "offline-dry-run":
         from .offline_decision import complete_offline_dry_run
 
-        result = asyncio.run(complete_offline_dry_run(args.output))
+        result = asyncio.run(complete_offline_dry_run(args.output, args.sessions))
     elif args.command == "simulate":
         result = replay_fixture(args.fixture, args.output)
         write_json(args.output / "replay.json", result)

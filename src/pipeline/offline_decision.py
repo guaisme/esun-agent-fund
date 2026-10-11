@@ -20,12 +20,18 @@ from .context import build_context
 from .workflow import competition_dry_run
 
 
-async def complete_offline_dry_run(output: Path) -> dict:
+async def complete_offline_dry_run(output: Path, session_count: int = 4) -> dict:
+    if session_count not in {4, 24}:
+        raise ValueError(
+            "Offline fixture supports 4 or 24 explicitly synthetic sessions"
+        )
     settings = load_settings()
-    tickers = sorted(UniverseLoader().get_all_tickers())[:30]
+    tickers = sorted(UniverseLoader().get_all_tickers())[
+        : (150 if session_count == 24 else 30)
+    ]
     days = []
     on = date(2026, 9, 21)
-    while on <= date(2026, 10, 30):
+    while on <= date(2026, 11, 27):
         if on.weekday() < 5:
             days.append(on.isoformat())
         on += timedelta(days=1)
@@ -57,7 +63,15 @@ async def complete_offline_dry_run(output: Path) -> dict:
             )
     state = PortfolioState()
     history = []
-    for trade_date in ("2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30"):
+    execution_days = [d for d in days if "2026-10-27" <= d <= "2026-11-27"][
+        :session_count
+    ]
+    for session_index, trade_date in enumerate(execution_days):
+        regime = (
+            ("risk_off", "risk_on", "risk_off")[session_index // 8]
+            if session_count == 24
+            else "neutral"
+        )
         context = build_context(
             data={"prices": rows, "flows": [], "revenue": []},
             state=state,
@@ -68,9 +82,9 @@ async def complete_offline_dry_run(output: Path) -> dict:
         )
         # Real exchange source names must not leak into synthetic evidence.
         for observation in context.observations:
-            observation["statement"] = "SYNTHETIC_FIXTURE: " + observation["statement"].replace(
-                "官方", "合成"
-            )
+            observation["statement"] = "SYNTHETIC_FIXTURE: " + observation[
+                "statement"
+            ].replace("官方", "合成")
         for source in context.sources:
             source.update(
                 authority="other",
@@ -92,19 +106,22 @@ async def complete_offline_dry_run(output: Path) -> dict:
             targets = None
             if feedback:
                 targets = feedback[0].get("suggested_targets")
-            optimizer = PortfolioOptimizer(settings.optimizer, settings.policy, settings.costs)
+            optimizer = PortfolioOptimizer(
+                settings.optimizer, settings.policy, settings.costs
+            )
             proposal = optimizer.optimize(
                 rankings=ctx.rankings["rankings"],
                 state=ctx.state,
                 previous_nav=ctx.previous_nav,
                 previous_closes=ctx.previous_closes,
-                regime="neutral",
+                regime=regime,
                 proposed_targets=targets,
             )
             if proposal.status != "PROPOSED":
                 return None, {
                     "status": "FAILED",
                     "error_type": "SyntheticOptimizerBlocked",
+                    "diagnostics": proposal.diagnostics,
                     "run_started_at": f"{trade_date}T08:00:00+08:00",
                     "run_completed_at": f"{trade_date}T08:01:00+08:00",
                 }
@@ -113,10 +130,12 @@ async def complete_offline_dry_run(output: Path) -> dict:
                 for r in ctx.observations
             }
             refs = [ctx.observations[0]["obs_id"]]
-            candidate = [r["ticker"] for r in ctx.rankings["rankings"]]
+            candidate = [r["ticker"] for r in ctx.rankings["rankings"]][:60]
             net = sum(
                 (
-                    ctx.previous_closes[o.ticker] * o.shares * (1 if o.side == "BUY" else -1)
+                    ctx.previous_closes[o.ticker]
+                    * o.shares
+                    * (1 if o.side == "BUY" else -1)
                     for o in proposal.orders
                 ),
                 Decimal(0),
@@ -124,8 +143,12 @@ async def complete_offline_dry_run(output: Path) -> dict:
             decision = InvestmentDecision(
                 trade_date=trade_date,
                 data_cutoff=ctx.data_cutoff,
-                regime="neutral",
-                stance="neutral",
+                regime=regime,
+                stance={
+                    "risk_on": "aggressive",
+                    "neutral": "neutral",
+                    "risk_off": "defensive",
+                }[regime],
                 investment_posture=(
                     "hold"
                     if abs(net) <= ctx.previous_nav * Decimal(".02")
@@ -142,15 +165,20 @@ async def complete_offline_dry_run(output: Path) -> dict:
                     for t in proposal.target_weights
                 },
                 observation_refs=refs,
-                market_logic="合成市場資料以固定中性風險預算重播，缺漏法人與營收不自行補值，所有資料及模型決策明確標示為MOCK。",
+                market_logic=f"合成市場資料以明確測試風險情境 {regime} 重播，缺漏法人與營收不自行補值，所有資料及模型決策明確標示為MOCK。",
                 counter_evidence=None,
-                cash_range=tuple(Decimal(v) for v in proposal.diagnostics["cash_range"]),
-                additional_research_needed=["SYNTHETIC_FIXTURE; actual Gemini not invoked"],
+                cash_range=tuple(
+                    Decimal(v) for v in proposal.diagnostics["cash_range"]
+                ),
+                additional_research_needed=[
+                    "SYNTHETIC_FIXTURE; actual Gemini not invoked"
+                ],
                 model_version="MOCK-DETERMINISTIC",
                 strategy_version=ctx.strategy_version,
             )
             functions["validate_proposal"](
-                json.dumps({t: str(w) for t, w in decision.target_weights.items()}), "neutral"
+                json.dumps({t: str(w) for t, w in decision.target_weights.items()}),
+                regime,
             )
             calls.append({"name": "validate_proposal", "synthetic": True})
             return decision, {
@@ -168,7 +196,11 @@ async def complete_offline_dry_run(output: Path) -> dict:
         write_json(daily / "features.json", context.snapshot)
         write_json(daily / "rankings.json", context.rankings)
         report = await competition_dry_run(
-            context, settings, daily, decision_runner=mock_runner, trading_days=set(days)
+            context,
+            settings,
+            daily,
+            decision_runner=mock_runner,
+            trading_days=set(days),
         )
         if not report.get("dplan_generated"):
             write_json(
@@ -180,13 +212,17 @@ async def complete_offline_dry_run(output: Path) -> dict:
                 },
             )
             return {"status": "FAILED", "synthetic": True, "trade_date": trade_date}
-        plan = __import__("json").loads(Path(report["plan_path"]).read_text(encoding="utf-8"))
+        plan = __import__("json").loads(
+            Path(report["plan_path"]).read_text(encoding="utf-8")
+        )
         orders = [
             TradeOrder(o["ticker"], o["side"], o["shares"], o["decision_ref"])
             for o in plan["orders"]
         ]
         bars = {
-            r["ticker"]: PriceBar.from_data_row(r) for r in rows if r["trade_date"] == trade_date
+            r["ticker"]: PriceBar.from_data_row(r)
+            for r in rows
+            if r["trade_date"] == trade_date
         }
         executed = PortfolioSimulator().execute_day(
             state,
@@ -199,7 +235,11 @@ async def complete_offline_dry_run(output: Path) -> dict:
             fixture_mode=True,
         )
         if executed.status != "EXECUTED":
-            return {"status": "FAILED", "synthetic": True, "reason": "Fixture simulation blocked"}
+            return {
+                "status": "FAILED",
+                "synthetic": True,
+                "reason": "Fixture simulation blocked",
+            }
         state = executed.state
         write_json(daily / "simulation.json", executed)
         write_json(daily / "portfolio.json", state)
@@ -209,6 +249,9 @@ async def complete_offline_dry_run(output: Path) -> dict:
                 "features": len(context.snapshot.values),
                 "rankings": len(context.rankings["rankings"]),
                 "order_count": len(orders),
+                "buy_order_count": sum(o.side == "BUY" for o in orders),
+                "sell_order_count": sum(o.side == "SELL" for o in orders),
+                "regime": regime,
                 "nav": executed.daily_nav.nav,
                 "holdings": len(state.positions),
                 "formal_readiness": report["status"],
